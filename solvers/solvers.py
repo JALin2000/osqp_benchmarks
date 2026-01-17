@@ -1,8 +1,12 @@
+from solvers.admm import ADMMSolver
+from solvers.superadmm import SuperADMMSolver
+from solvers.superadmmdual import SuperADMMDualSolver
+from solvers.superadmm_tricks import SuperADMMTricksSolver
 from solvers.ecos import ECOSSolver
 from solvers.gurobi import GUROBISolver
 from solvers.mosek import MOSEKSolver
 from solvers.osqp import OSQPSolver
-from solvers.qpoases import qpOASESSolver
+# from solvers.qpoases import qpOASESSolver
 
 ECOS = 'ECOS'
 ECOS_high = ECOS + "_high"
@@ -15,6 +19,35 @@ OSQP_polish_high = OSQP_polish + '_high'
 MOSEK = 'MOSEK'
 MOSEK_high = MOSEK + "_high"
 qpOASES = 'qpOASES'
+ADMM = 'ADMM'
+ADMM_high = ADMM + '_high'
+SuperADMM = 'Super'
+SuperADMM_high = SuperADMM + '_high'
+
+SuperADMMDual = 'SuperADMMDual'
+SuperADMMDual_high = SuperADMMDual + '_high'
+
+Super_ruiz = 'Super_ruiz'
+Super_ruiz_high = Super_ruiz + '_high'
+Super_ruiz_kaczmarz = 'Super_ruiz_kaczmarz'
+Super_ruiz_kaczmarz_high = Super_ruiz_kaczmarz + '_high'
+Super_ruiz_ldlt = 'Super_ruiz_ldlt'
+Super_ruiz_ldlt_high = Super_ruiz_ldlt + '_high'
+Super_ruiz_new_fact = 'Super_ruiz_new_fact'
+Super_ruiz_new_fact_high = Super_ruiz_new_fact + '_high'
+Super_ruiz_cg = 'Super_ruiz_cg'
+Super_ruiz_cg_high = Super_ruiz_cg + '_high'
+Super_ruiz_cg_precond = 'Super_ruiz_cg_precond'
+Super_ruiz_cg_precond_high = Super_ruiz_cg_precond + '_high'
+
+Super_ldlt = 'Super_ldlt'
+Super_ldlt_high = Super_ldlt + '_high'
+Super_new_fact = 'Super_new_fact'
+Super_new_fact_high = Super_new_fact + '_high'
+Super_cg = 'Super_cg'
+Super_cg_high = Super_cg + '_high'
+Super_cg_precond = 'Super_cg_precond'
+Super_cg_precond_high = Super_cg_precond + '_high'
 
 # solvers = [ECOSSolver, GUROBISolver, MOSEKSolver, OSQPSolver]
 # SOLVER_MAP = {solver.name(): solver for solver in solvers}
@@ -29,37 +62,64 @@ SOLVER_MAP = {OSQP: OSQPSolver,
               MOSEK_high: MOSEKSolver,
               ECOS: ECOSSolver,
               ECOS_high: ECOSSolver,
-              qpOASES: qpOASESSolver}
+              # qpOASES: qpOASESSolver,
+              ADMM: ADMMSolver,
+              ADMM_high: ADMMSolver,
+              SuperADMM: SuperADMMSolver,
+              SuperADMM_high: SuperADMMSolver,
+              SuperADMMDual: SuperADMMDualSolver,
+              SuperADMMDual_high: SuperADMMDualSolver,
+              Super_ruiz: SuperADMMTricksSolver,
+              Super_ruiz_high: SuperADMMTricksSolver,
+              Super_ruiz_kaczmarz: SuperADMMTricksSolver,
+              Super_ruiz_kaczmarz_high: SuperADMMTricksSolver,
+              Super_ruiz_ldlt: SuperADMMTricksSolver,
+              Super_ruiz_ldlt_high: SuperADMMTricksSolver,
+              Super_ruiz_new_fact: SuperADMMTricksSolver,
+              Super_ruiz_new_fact_high: SuperADMMTricksSolver,
+              Super_ruiz_cg: SuperADMMTricksSolver,
+              Super_ruiz_cg_high: SuperADMMTricksSolver,
+              Super_ruiz_cg_precond: SuperADMMTricksSolver,
+              Super_ruiz_cg_precond_high: SuperADMMTricksSolver,
+              Super_ldlt: SuperADMMTricksSolver,
+              Super_ldlt_high: SuperADMMTricksSolver,
+              Super_new_fact: SuperADMMTricksSolver,
+              Super_new_fact_high: SuperADMMTricksSolver,
+              Super_cg: SuperADMMTricksSolver,
+              Super_cg_high: SuperADMMTricksSolver,
+              Super_cg_precond: SuperADMMTricksSolver,
+              Super_cg_precond_high: SuperADMMTricksSolver,
+              }
 
 time_limit = 1000. # Seconds
 eps_low = 1e-03
-eps_high = 1e-05
+eps_high = 1e-08
 
 # Solver settings
 settings = {
     OSQP: {'eps_abs': eps_low,
-           'eps_rel': eps_low,
+           'eps_rel': 0.0,
            'polish': False,
            'max_iter': int(1e09),
            'eps_prim_inf': 1e-15,  # Disable infeas check
-           'eps_dual_inf': 1e-15,
+           'eps_dual_inf': 1e-15
     },
     OSQP_high: {'eps_abs': eps_high,
-                'eps_rel': eps_high,
+                'eps_rel': 0.0,
                 'polish': False,
                 'max_iter': int(1e09),
                 'eps_prim_inf': 1e-15,  # Disable infeas check
                 'eps_dual_inf': 1e-15
     },
     OSQP_polish: {'eps_abs': eps_low,
-                  'eps_rel': eps_low,
+                  'eps_rel': 0.0,
                   'polish': True,
                   'max_iter': int(1e09),
                   'eps_prim_inf': 1e-15,  # Disable infeas check
                   'eps_dual_inf': 1e-15
     },
     OSQP_polish_high: {'eps_abs': eps_high,
-                       'eps_rel': eps_high,
+                       'eps_rel': 0.0,
                        'polish': True,
                        'max_iter': int(1e09),
                        'eps_prim_inf': 1e-15,  # Disable infeas check
@@ -85,8 +145,278 @@ settings = {
            'reltol': eps_low},
     ECOS_high: {'abstol': eps_high,
                 'reltol': eps_high},
-    qpOASES: {}
-}
+    qpOASES: {},
+    ADMM: {'rho': 1.0,
+           'max_iter': int(1e4),
+           'abstol': eps_low,
+           'reltol': 0.0},
+    ADMM_high: {'rho': 1.0,
+                'max_iter': int(1e4),
+                'abstol': eps_high,
+                'reltol': 0.0},
+    SuperADMM: {'rho': 0.1,
+                'alpha': 500.0,
+                'tau': 0.5,
+                'b0': 1e8,
+                'sigma': 1e-6,
+                'max_iter': int(1e4),
+                'abstol': eps_low,
+                'reltol': 0.0},
+    SuperADMM_high: {'rho': 0.1,
+                     'alpha': 500.0,
+                     'tau': 0.5,
+                     'b0': 1e8,
+                     'sigma': 1e-6,
+                     'max_iter': int(1e4),
+                     'abstol': eps_high,
+                     'reltol': 0.0},
+    SuperADMMDual: {'rho': 1.0,
+                    'alpha': 0.8,
+                    'max_iter': int(1e4),
+                    'abstol': eps_low,
+                    'reltol': 0.0
+                   },
+    SuperADMMDual_high: {'rho': 1.0,
+                         'alpha': 0.8,
+                         'max_iter': int(1e4),
+                         'abstol': eps_high,
+                         'reltol': 0.0
+                        },
+    Super_ruiz: {'rho': 1.0,
+                 'alpha': 7.5,
+                 'tau': 0.5,
+                 'b0': 1e3,
+                 'sigma': 1e-6,
+                 'max_iter': int(1e4),
+                 'abstol': eps_low,
+                 'reltol': 0.0,
+                 'use_preconditioning': True,
+                 'solving_method': 'direct',
+                 'max_iter_kacz': 5
+              },
+    Super_ruiz_high: {'rho': 1.0,
+                          'alpha': 7.5,
+                          'tau': 0.5,
+                          'b0': 1e3,
+                          'sigma': 1e-6,
+                          'max_iter': int(1e4),
+                          'abstol': eps_high,
+                          'reltol': 0.0,
+                          'use_preconditioning': True,
+                          'solving_method': 'direct',
+                          'max_iter_kacz': 5
+                         },
+    Super_ruiz_kaczmarz: {'rho': 1.0,
+                 'alpha': 7.5,
+                 'tau': 0.5,
+                 'b0': 1e3,
+                 'sigma': 1e-6,
+                 'max_iter': int(1e4),
+                 'abstol': eps_low,
+                 'reltol': 0.0,
+                 'use_preconditioning': True,
+                 'solving_method': 'kaczmarz',
+                 'max_iter_kacz': 5
+              },
+    Super_ruiz_kaczmarz_high: {'rho': 1.0,
+                              'alpha': 7.5,
+                              'tau': 0.5,
+                              'b0': 1e3,
+                              'sigma': 1e-6,
+                              'max_iter': int(1e4),
+                              'abstol': eps_high,
+                              'reltol': 0.0,
+                              'use_preconditioning': True,
+                              'solving_method': 'kaczmarz',
+                              'max_iter_kacz': 5
+                             },
+    Super_ruiz_ldlt: {'rho': 1.0,
+                 'alpha': 7.5,
+                 'tau': 0.5,
+                 'b0': 1e3,
+                 'sigma': 1e-6,
+                 'max_iter': int(1e4),
+                 'abstol': eps_low,
+                 'reltol': 0.0,
+                 'use_preconditioning': True,
+                 'solving_method': 'LDLT',
+                 'max_iter_kacz': 5
+              },
+    Super_ruiz_ldlt_high: {'rho': 1.0,
+                              'alpha': 7.5,
+                              'tau': 0.5,
+                              'b0': 1e3,
+                              'sigma': 1e-6,
+                              'max_iter': int(1e4),
+                              'abstol': eps_high,
+                              'reltol': 0.0,
+                              'use_preconditioning': True,
+                              'solving_method': 'LDLT',
+                              'max_iter_kacz': 5
+                             },
+    Super_ruiz_new_fact: {'rho': 1.0,
+                       'alpha': 7.5,
+                       'tau': 0.5,
+                       'b0': 1e3,
+                       'sigma': 1e-6,
+                       'max_iter': int(1e4),
+                       'abstol': eps_low,
+                       'reltol': 0.0,
+                       'use_preconditioning': True,
+                       'solving_method': 'new_fact',
+                       'max_iter_kacz': 5
+                },
+    Super_ruiz_new_fact_high: {'rho': 1.0,
+                                     'alpha': 7.5,
+                                     'tau': 0.5,
+                                     'b0': 1e3,
+                                     'sigma': 1e-6,
+                                     'max_iter': int(1e4),
+                                     'abstol': eps_high,
+                                     'reltol': 0.0,
+                                     'use_preconditioning': True,
+                                     'solving_method': 'new_fact',
+                                     'max_iter_kacz': 5
+                                    },
+    Super_ruiz_cg: {'rho': 1.0,
+                       'alpha': 7.5,
+                       'tau': 0.5,
+                       'b0': 1e3,
+                       'sigma': 1e-6,
+                       'max_iter': int(1e4),
+                       'abstol': eps_low,
+                       'reltol': 0.0,
+                       'use_preconditioning': True,
+                       'solving_method': 'CG',
+                       'max_iter_kacz': 5
+                },
+    Super_ruiz_cg_high: {'rho': 1.0,
+                                     'alpha': 7.5,
+                                     'tau': 0.5,
+                                     'b0': 1e3,
+                                     'sigma': 1e-6,
+                                     'max_iter': int(1e4),
+                                     'abstol': eps_high,
+                                     'reltol': 0.0,
+                                     'use_preconditioning': True,
+                                     'solving_method': 'CG',
+                                     'max_iter_kacz': 5
+                                    },
+    Super_ruiz_cg_precond: {'rho': 1.0,
+                       'alpha': 7.5,
+                       'tau': 0.5,
+                       'b0': 1e3,
+                       'sigma': 1e-6,
+                       'max_iter': int(1e4),
+                       'abstol': eps_low,
+                       'reltol': 0.0,
+                       'use_preconditioning': True,
+                       'solving_method': 'CG_precond',
+                       'max_iter_kacz': 5
+                },
+    Super_ruiz_cg_precond_high: {'rho': 1.0,
+                                     'alpha': 7.5,
+                                     'tau': 0.5,
+                                     'b0': 1e3,
+                                     'sigma': 1e-6,
+                                     'max_iter': int(1e4),
+                                     'abstol': eps_high,
+                                     'reltol': 0.0,
+                                     'use_preconditioning': True,
+                                     'solving_method': 'CG_precond',
+                                     'max_iter_kacz': 5
+                                    },
+    Super_ldlt: {'rho': 1.0,
+                 'alpha': 500.0,
+                 'tau': 0.5,
+                 'b0': 1e8,
+                 'sigma': 1e-6,
+                 'max_iter': int(1e4),
+                 'abstol': eps_low,
+                 'reltol': 0.0,
+                 'use_preconditioning': True,
+                 'solving_method': 'LDLT',
+                 'max_iter_kacz': 5
+    },
+    Super_ldlt_high: {'rho': 1.0,
+                 'alpha': 500.0,
+                 'tau': 0.5,
+                 'b0': 1e8,
+                 'sigma': 1e-6,
+                 'max_iter': int(1e4),
+                 'abstol': eps_high,
+                 'reltol': 0.0,
+                 'use_preconditioning': True,
+                 'solving_method': 'LDLT',
+                 'max_iter_kacz': 5
+    },
+       Super_new_fact: {'rho': 1.0,
+                      'alpha': 500.0,
+                      'tau': 0.5,
+                      'b0': 1e8,
+                      'sigma': 1e-6,
+                      'max_iter': int(1e4),
+                      'abstol': eps_low,
+                      'reltol': 0.0,
+                      'use_preconditioning': True,
+                      'solving_method': 'new_fact',
+                      'max_iter_kacz': 5},
+       Super_new_fact_high: {'rho': 1.0,
+                             'alpha': 500.0,
+                             'tau': 0.5,
+                             'b0': 1e8,
+                             'sigma': 1e-6,
+                             'max_iter': int(1e4),
+                             'abstol': eps_high,
+                             'reltol': 0.0,
+                             'use_preconditioning': True,
+                             'solving_method': 'new_fact',
+                             'max_iter_kacz': 5},
+       Super_cg: {'rho': 1.0,
+                  'alpha': 500.0,
+                  'tau': 0.5,
+                  'b0': 1e8,
+                  'sigma': 1e-6,
+                  'max_iter': int(1e4),
+                  'abstol': eps_low,
+                  'reltol': 0.0,
+                  'use_preconditioning': True,
+                  'solving_method': 'CG',
+                  'max_iter_kacz': 5},
+       Super_cg_high: {'rho': 1.0,
+                         'alpha': 500.0,
+                         'tau': 0.5,
+                         'b0': 1e8,
+                         'sigma': 1e-6,
+                         'max_iter': int(1e4),
+                         'abstol': eps_high,
+                         'reltol': 0.0,
+                         'use_preconditioning': True,
+                         'solving_method': 'CG',
+                         'max_iter_kacz': 5},
+       Super_cg_precond: {'rho': 1.0,
+                  'alpha': 500.0,
+                  'tau': 0.5,
+                  'b0': 1e8,
+                  'sigma': 1e-6,
+                  'max_iter': int(1e4),
+                  'abstol': eps_low,
+                  'reltol': 0.0,
+                  'use_preconditioning': True,
+                  'solving_method': 'CG_precond',
+                  'max_iter_kacz': 5},
+       Super_cg_precond_high: {'rho': 1.0,
+                         'alpha': 500.0,
+                         'tau': 0.5,
+                         'b0': 1e8,
+                         'sigma': 1e-6,
+                         'max_iter': int(1e4),
+                         'abstol': eps_high,
+                         'reltol': 0.0,
+                         'use_preconditioning': True,
+                         'solving_method': 'CG_precond',
+                         'max_iter_kacz': 5},
+       }
 
 for key in settings:
     settings[key]['verbose'] = False

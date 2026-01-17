@@ -2,6 +2,8 @@ import os
 from multiprocessing import Pool, cpu_count
 from itertools import repeat
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 from solvers.solvers import SOLVER_MAP
 from problem_classes.random_qp import RandomQPExample
@@ -22,6 +24,82 @@ examples = [RandomQPExample,
             ControlExample]
 
 EXAMPLES_MAP = {example.name(): example for example in examples}
+
+
+def plot_R_and_b_history(R_history, b_history, output_path):
+    """Plot R diagonal elements with b and 1/b bounds over iterations.
+    
+    Args:
+        R_history: list of R matrices (diagonal elements are plotted)
+        b_history: list of b scalar values
+        output_path: path to save the plot
+    """
+    if R_history is None or b_history is None:
+        return
+    
+    try:
+        iterations = np.arange(len(b_history))
+        
+        # Extract diagonal elements from R matrices
+        R_diag_list = [np.diag(R_mat) for R_mat in R_history]
+        R_diag_array = np.array(R_diag_list)  # shape: (iterations, m)
+        num_constraints = R_diag_array.shape[1]
+        
+        # Compute b bounds
+        b_upper = np.array(b_history)  # b is the upper bound
+        b_lower = 1.0 / b_upper         # 1/b is the lower bound
+        
+        # Create figure with single y-axis
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # Plot each R diagonal element
+        colors = plt.cm.tab20(np.linspace(0, 1, min(num_constraints, 20)))
+        if num_constraints > 20:
+            colors = plt.cm.gist_rainbow(np.linspace(0, 1, num_constraints))
+        
+        for i in range(num_constraints):
+            R_i = R_diag_array[:, i]
+            ax.semilogy(iterations, R_i, color=colors[i], linewidth=1.0, 
+                       label=f'R[{i},{i}]', alpha=0.7)
+        
+        # Plot bounds: b (upper bound) and 1/b (lower bound)
+        ax.semilogy(iterations, b_upper, color='red', linewidth=3, 
+                   label='b (upper bound)', linestyle='-', zorder=10)
+        ax.semilogy(iterations, b_lower, color='blue', linewidth=3, 
+                   label='1/b (lower bound)', linestyle='--', zorder=10)
+        
+        # Labels and formatting
+        ax.set_xlabel('Iteration', fontsize=13, fontweight='bold')
+        ax.set_ylabel('Value (log scale)', fontsize=13, fontweight='bold')
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3, which='both', linestyle='-', linewidth=0.5)
+        ax.grid(True, alpha=0.15, which='minor', linestyle=':', linewidth=0.3)
+        
+        # Title
+        plt.title(f'SuperADMM: R Matrix Diagonal Elements (m={num_constraints}) with Bounds [1/b, b]', 
+                 fontsize=14, fontweight='bold')
+        
+        # Legend handling based on number of constraints
+        if num_constraints <= 10:
+            ax.legend(loc='best', fontsize=10, framealpha=0.95)
+        else:
+            # Show legend for b bounds only, add annotation for R elements
+            handles, labels = ax.get_legend_handles_labels()
+            # Keep only the last two (b and 1/b)
+            ax.legend(handles[-2:], labels[-2:], loc='best', fontsize=11, framealpha=0.95)
+            # Add annotation about R elements
+            ax.text(0.02, 0.02, f'Showing all {num_constraints} R diagonal elements', 
+                   transform=ax.transAxes, fontsize=11, verticalalignment='bottom',
+                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8, edgecolor='gray'))
+        
+        fig.tight_layout()
+        
+        # Save figure
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+    except Exception as e:
+        print(f"Error plotting R and b history: {e}")
 
 
 class Example(object):
@@ -178,6 +256,17 @@ class Example(object):
             solution_dict['solve_time'] = results.solve_time
             solution_dict['update_time'] = results.update_time
             solution_dict['rho_updates'] = results.rho_updates
+        
+        if solver[:9] == 'SuperADMM':
+            solution_dict['b'] = results.b
+            solution_dict['R_bounded_ratio'] = results.R_bounded_ratio
+
+            # Plot R and b history
+            if hasattr(results, 'R_history') and hasattr(results, 'b_history') and (dimension == 10 or dimension == 55 or dimension == 209):
+                plot_dir = os.path.join('.', 'results', self.output_folder, solver, self.name, 'plots')
+                make_sure_path_exists(plot_dir)
+                plot_filename = os.path.join(plot_dir, f'R_b_history_n{dimension}_inst{instance_number}.png')
+                plot_R_and_b_history(results.R_history, results.b_history, plot_filename)
 
         # Return solution
         return pd.DataFrame(solution_dict)
