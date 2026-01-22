@@ -233,8 +233,18 @@ class Example(object):
               (self.name, dimension, instance_number, solver))
 
         # Solve problem
-        s = SOLVER_MAP[solver](settings)
-        results = s.solve(example_instance)
+        if solver[:11] == 'OSQP_python':
+            s = SOLVER_MAP[solver]()
+            s.setup(P=example_instance.qp_problem['P'],
+                    q=example_instance.qp_problem['q'],
+                    A=example_instance.qp_problem['A'],
+                    l=example_instance.qp_problem['l'],
+                    u=example_instance.qp_problem['u'],
+                    **settings)
+            results = s.solve()
+        else:
+            s = SOLVER_MAP[solver](settings)
+            results = s.solve(example_instance)
 
         # Create solution as pandas table
         P = example_instance.qp_problem['P']
@@ -251,11 +261,12 @@ class Example(object):
 
         # Add status polish if OSQP
         if solver[:4] == 'OSQP':
-            solution_dict['status_polish'] = results.status_polish
             solution_dict['setup_time'] = results.setup_time
             solution_dict['solve_time'] = results.solve_time
             solution_dict['update_time'] = results.update_time
             solution_dict['rho_updates'] = results.rho_updates
+            if 'python' not in solver:
+                solution_dict['status_polish'] = results.status_polish
         
         if solver[:9] == 'SuperADMM':
             solution_dict['b'] = results.b

@@ -6,6 +6,7 @@ from solvers.ecos import ECOSSolver
 from solvers.gurobi import GUROBISolver
 from solvers.mosek import MOSEKSolver
 from solvers.osqp import OSQPSolver
+from solvers.osqppurepy import OSQP as OSQPPythonSolver 
 # from solvers.qpoases import qpOASESSolver
 
 ECOS = 'ECOS'
@@ -49,6 +50,9 @@ Super_cg_high = Super_cg + '_high'
 Super_cg_precond = 'Super_cg_precond'
 Super_cg_precond_high = Super_cg_precond + '_high'
 
+OSQP_python = 'OSQP_python'
+OSQP_python_high = OSQP_python + '_high'
+
 # solvers = [ECOSSolver, GUROBISolver, MOSEKSolver, OSQPSolver]
 # SOLVER_MAP = {solver.name(): solver for solver in solvers}
 
@@ -89,6 +93,8 @@ SOLVER_MAP = {OSQP: OSQPSolver,
               Super_cg_high: SuperADMMTricksSolver,
               Super_cg_precond: SuperADMMTricksSolver,
               Super_cg_precond_high: SuperADMMTricksSolver,
+              OSQP_python: OSQPPythonSolver,
+              OSQP_python_high: OSQPPythonSolver,
               }
 
 time_limit = 1000. # Seconds
@@ -416,7 +422,26 @@ settings = {
                          'use_preconditioning': True,
                          'solving_method': 'CG_precond',
                          'max_iter_kacz': 5},
+       
+       OSQP_python:{
+             'max_iter': int(1e4),
+             'eps_abs': eps_low,
+             'eps_rel': 0.0,
+             'polish': False,
+             'verbose': False,
+             'eps_prim_inf': 1e-15,  # Disable infeas check
+             'eps_dual_inf': 1e-15
+       },
+       OSQP_python_high:{
+             'max_iter': int(1e4),
+             'eps_abs': eps_high,
+             'eps_rel': 0.0,
+             'polish': False,
+             'verbose': False,
+             'eps_prim_inf': 1e-15,  # Disable infeas check
+             'eps_dual_inf': 1e-15
        }
+}
 
 for key in settings:
     settings[key]['verbose'] = False

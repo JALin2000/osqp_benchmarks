@@ -329,6 +329,38 @@ class results(object):
         self.info = info
         self.linesearch = linesearch
 
+# revised from submodules/osqp_benchmarks/solvers/results.py
+class Results(object):
+    '''
+    Results class from QP solution
+    '''
+    def __init__(self, solution, info):
+        status = info.status
+        if status == 'solved':
+            self.status = 'optimal'
+        elif status == 'solved inaccurate':
+            self.status = 'optimal inaccurate'
+        elif status == 'maximum iterations reached':
+            self.status = 'max_iter_reached'
+        elif status == 'primal infeasible':
+            self.status = 'primal infeasible'
+        elif status == 'primal infeasible inaccurate':
+            self.status = 'primal infeasible inaccurate'
+        elif status == 'dual infeasible':
+            self.status = 'dual infeasible'
+        elif status == 'dual infeasible inaccurate':
+            self.status = 'dual infeasible inaccurate'
+        
+        self.obj_val = info.obj_val
+        self.x = solution.x
+        self.y = solution.y
+        self.run_time = info.run_time
+        self.niter = info.iter
+        self.setup_time = info.setup_time
+        self.solve_time = info.solve_time
+        self.update_time = info.update_time
+        self.rho_updates = info.rho_updates
+
 
 class OSQP(object):
     """OSQP solver lower level interface
@@ -1303,7 +1335,8 @@ class OSQP(object):
         self.work.clear_update_time = 1
 
         # Store results structure
-        return results(self.work.solution, self.work.info, ls)
+        # return results(self.work.solution, self.work.info, ls)
+        return Results(self.work.solution, self.work.info)
 
     #
     #   Auxiliary API Functions
