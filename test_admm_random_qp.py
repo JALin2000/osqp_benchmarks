@@ -34,21 +34,22 @@ print('small test:', small_test)
 
 # Configure solvers
 if high_accuracy:
-    solvers = [s.ADMM_high, 
-            #    s.OSQP_high, s.OSQP_polish_high, 
-            #    s.SuperADMM_high, 
-            #    s.Super_ruiz_high,
+    solvers = [# s.ADMM_high, 
+               # s.OSQP_high, s.OSQP_polish_high, 
+               s.SuperADMM_high, 
+               s.Super_ruiz_high,
             # #    s.Super_ruiz_kaczmarz_high,
-            #    s.Super_ruiz_ldlt_high,
-            #    s.Super_ruiz_new_fact_high,
-            #    s.Super_ruiz_cg_high,
-            #    s.Super_ruiz_cg_precond_high,
-            #    s.Super_ldlt_high,
-            #    s.Super_new_fact_high,
-            #    s.Super_cg_high,
-            #    s.Super_cg_precond_high,
+               s.Super_ruiz_ldlt_high,
+               s.Super_ruiz_new_fact_high,
+               s.Super_ruiz_cg_high,
+               s.Super_ruiz_cg_precond_high,
+               s.Super_ldlt_high,
+               s.Super_new_fact_high,
+               s.Super_cg_high,
+               s.Super_cg_precond_high,
                ]
-    OUTPUT_FOLDER = 'ADMM_alpha=1.0_gradual_change4_high_accuracy'
+    # OUTPUT_FOLDER = 'ADMM_alpha=1.0_gradual_change4_high_accuracy'
+    OUTPUT_FOLDER = 'ablation_study_high_accuracy'
     for key in s.settings:
         s.settings[key]['high_accuracy'] = True
 else:
@@ -56,13 +57,13 @@ else:
                s.OSQP, s.OSQP_polish, 
                s.SuperADMM, 
                s.Super_ruiz,
-            #    s.Super_ruiz_ldlt,
+               s.Super_ruiz_ldlt,
                s.Super_ruiz_new_fact,
                s.Super_ruiz_cg,
                s.Super_ruiz_cg_precond,
             #    s.Super_ldlt,
             #    s.Super_new_fact,
-               s.Super_cg,
+            #    s.Super_cg,
             #    s.Super_cg_precond,
                ]
     OUTPUT_FOLDER = 'ablation_study_high_dim'
