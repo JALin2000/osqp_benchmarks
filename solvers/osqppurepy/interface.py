@@ -255,12 +255,15 @@ class OSQP(object):
         ):
             raise ValueError('No updatable settings has been specified!')
 
-    def solve(self):
+    def solve(self, total_iters=None):
         """
         Solve QP Problem
+
+        Args:
+            total_iters: total number of iterations applied to solve the problem, only for the use of NN.
         """
         # Solve QP
-        return self._model.solve()
+        return self._model.solve(total_iters)
 
     def constant(self, constant_name):
         """

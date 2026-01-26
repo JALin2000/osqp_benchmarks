@@ -161,9 +161,9 @@ class settings(object):
         self.polish = kwargs.pop('polish', False)
         self.polish_refine_iter = kwargs.pop('polish_refine_iter', 3)
         self.adaptive_rho = kwargs.pop('adaptive_rho', True)
-        self.adaptive_rho_interval = kwargs.pop('adaptive_rho_interval', 200)
-        self.adaptive_rho_tolerance = kwargs.pop('adaptive_rho_tolerance', 5)
-        self.adaptive_rho_fraction = kwargs.pop('adaptive_rho_fraction', 0.7)
+        self.adaptive_rho_interval = kwargs.pop('adaptive_rho_interval', 50)
+        self.adaptive_rho_tolerance = kwargs.pop('adaptive_rho_tolerance', 5.0)
+        self.adaptive_rho_fraction = kwargs.pop('adaptive_rho_fraction', 0.4)
 
 
 class scaling(object):
@@ -360,6 +360,10 @@ class Results(object):
         self.solve_time = info.solve_time
         self.update_time = info.update_time
         self.rho_updates = info.rho_updates
+        self.pri_res = info.pri_res
+        self.dua_res = info.dua_res
+        self.pri_res_vec = info.pri_res_vec
+        self.dua_res_vec = info.dua_res_vec
 
 
 class OSQP(object):
@@ -757,6 +761,20 @@ class OSQP(object):
 
         return la.norm(pri_res, np.inf)
 
+    def compute_pri_res_vec(self, x, z):
+        """
+        Compute primal residual Ax - z
+        """
+
+        # Primal residual
+        Ax = self.work.data.A.dot(x)
+        pri_res = Ax - z
+
+        if self.work.settings.scaling and not self.work.settings.scaled_termination:
+            pri_res = self.work.scaling.Einv.dot(pri_res)
+
+        return pri_res
+
     def compute_pri_tol(self, eps_abs, eps_rel):
         """
         Compute primal tolerance using problem data
@@ -794,6 +812,19 @@ class OSQP(object):
             dua_res = self.work.scaling.cinv * self.work.scaling.Dinv.dot(dua_res)
 
         return la.norm(dua_res, np.inf)
+    
+    def compute_dua_res_vec(self, x, y):
+        """
+        Compute dual residual Px + q + A'y
+        """
+
+        dua_res = self.work.data.P.dot(x) + self.work.data.q + self.work.data.A.T.dot(y)
+
+        if self.work.settings.scaling and not self.work.settings.scaled_termination:
+            # Use unscaled residual
+            dua_res = self.work.scaling.cinv * self.work.scaling.Dinv.dot(dua_res)
+
+        return dua_res
 
     def compute_dua_tol(self, eps_abs, eps_rel):
         """
@@ -979,14 +1010,18 @@ class OSQP(object):
 
         if polish == 1:
             self.work.pol.obj_val = self.compute_obj_val(self.work.pol.x)
-            self.work.pol.pri_res = self.compute_pri_res(self.work.pol.x, self.work.pol.z)
-            self.work.pol.dua_res = self.compute_dua_res(self.work.pol.x, self.work.pol.y)
+            self.work.pol.pri_res_vec = self.compute_pri_res_vec(self.work.pol.x, self.work.pol.z)
+            self.work.pol.pri_res = la.norm(self.work.pol.pri_res_vec, np.inf)
+            self.work.pol.dua_res_vec = self.compute_dua_res_vec(self.work.pol.x, self.work.pol.y)
+            self.work.pol.dua_res = la.norm(self.work.pol.dua_res_vec, np.inf)
             self.work.info.polish_time = time.time() - self.work.timer
         else:
             self.work.info.iter = iter
             self.work.info.obj_val = self.compute_obj_val(self.work.x)
-            self.work.info.pri_res = self.compute_pri_res(self.work.x, self.work.z)
-            self.work.info.dua_res = self.compute_dua_res(self.work.x, self.work.y)
+            self.work.info.pri_res_vec = self.compute_pri_res_vec(self.work.x, self.work.z)
+            self.work.info.pri_res = la.norm(self.work.info.pri_res_vec, np.inf)
+            self.work.info.dua_res_vec = self.compute_dua_res_vec(self.work.x, self.work.y)
+            self.work.info.dua_res = la.norm(self.work.info.dua_res_vec, np.inf)
             self.work.info.solve_time = time.time() - self.work.timer
 
     def print_summary(self):
@@ -1146,6 +1181,26 @@ class OSQP(object):
             self.work.solution.x = np.array([None] * self.work.data.n)
             self.work.solution.y = np.array([None] * self.work.data.m)
 
+    def get_solver_state(self):
+        """
+        Get current solver state for RL observation
+        Returns dict with x, y, z, Ax, pri_res, dua_res
+        """
+        Ax = self.work.data.A.dot(self.work.x)
+        return {
+            'x': np.copy(self.work.x),
+            'y': np.copy(self.work.y),
+            'z': np.copy(self.work.z),
+            'Ax': Ax,
+            'pri_res': self.work.info.pri_res if hasattr(self.work.info, 'pri_res') else np.inf * np.ones(self.work.data.m),
+            'pri_res_vec': np.copy(self.work.info.pri_res_vec) if hasattr(self.work.info, 'pri_res_vec') else np.inf * np.ones(self.work.data.m),
+            'dua_res': self.work.info.dua_res if hasattr(self.work.info, 'dua_res') else np.inf * np.ones(self.work.data.m),
+            'dua_res_vec': np.copy(self.work.info.dua_res_vec) if hasattr(self.work.info, 'dua_res_vec') else np.inf * np.ones(self.work.data.m),
+            'rho_vec': np.copy(self.work.rho_vec),
+            'n': self.work.data.n,
+            'm': self.work.data.m,
+        }
+
     #
     #   Main Solver API
     #
@@ -1188,6 +1243,9 @@ class OSQP(object):
         # Flag indicating that the update_time should be set to zero
         self.work.clear_update_time = 0
 
+        # RL: Initialize perturbation callback to None
+        self.work.perturbation_callback = None
+
         # Settings
         self.work.settings = settings(**stgs)
 
@@ -1217,9 +1275,10 @@ class OSQP(object):
         if self.work.settings.verbose:
             self.print_setup_header(self.work.data, self.work.settings)
 
-    def solve(self):
+    def solve(self, total_iters=None):
         """
         Solve QP problem using OSQP
+        
         """
         # Start timer
         self.work.timer = time.time()
@@ -1253,6 +1312,20 @@ class OSQP(object):
 
             # Third step: update y
             self.update_y()
+
+            # RL PERTURBATION: Apply perturbations if callback is set
+            if hasattr(self.work, 'perturbation_callback') and self.work.perturbation_callback is not None:
+                try:
+                    delta_z, delta_y = self.work.perturbation_callback() # TODO: revise perturbation to y and z
+                    if delta_z is not None:
+                        self.work.z = self.work.z + delta_z.reshape(-1)
+                    if delta_y is not None: # supports broadcasting
+                        self.work.y = self.work.y + delta_y.reshape(-1)
+                except Exception as e:
+                    # If callback fails, just continue without perturbation
+                    if self.work.settings.verbose:
+                        print(f"Warning: Perturbation callback failed: {e}")
+                    pass
 
             if self.work.settings.check_termination:
                 # Update info
@@ -1294,7 +1367,8 @@ class OSQP(object):
 
         # If max iterations reached, update status accordingly
         if iter == self.work.settings.max_iter:
-            if not self.check_termination(approximate=True):
+            # if not self.check_termination(approximate=True):
+            if not self.check_termination(): # TODO: currently disable approximate check for max iter, revise later
                 self.work.info.status_val = OSQP_MAX_ITER_REACHED
 
         # Update status string

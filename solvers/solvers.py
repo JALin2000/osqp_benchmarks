@@ -439,7 +439,8 @@ settings = {
              'polish': False,
              'verbose': False,
              'eps_prim_inf': 1e-15,  # Disable infeas check
-             'eps_dual_inf': 1e-15
+             'eps_dual_inf': 1e-15,
+             'warm_start': False
        }
 }
 
