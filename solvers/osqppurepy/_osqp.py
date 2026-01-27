@@ -151,7 +151,8 @@ class settings(object):
         self.eps_rel = kwargs.pop('eps_rel', 1e-3)
         self.eps_prim_inf = kwargs.pop('eps_prim_inf', 1e-4)
         self.eps_dual_inf = kwargs.pop('eps_dual_inf', 1e-4)
-        self.alpha = kwargs.pop('alpha', 1.6)
+        self.alpha_x = kwargs.pop('alpha_x', 1.6)
+        self.alpha_z = kwargs.pop('alpha_z', 1.6)
         self.linsys_solver = kwargs.pop('linsys_solver', QDLDL_SOLVER)
         self.delta = kwargs.pop('delta', 1e-6)
         self.verbose = kwargs.pop('verbose', True)
@@ -164,6 +165,7 @@ class settings(object):
         self.adaptive_rho_interval = kwargs.pop('adaptive_rho_interval', 50)
         self.adaptive_rho_tolerance = kwargs.pop('adaptive_rho_tolerance', 5.0)
         self.adaptive_rho_fraction = kwargs.pop('adaptive_rho_fraction', 0.4)
+        self.learnt_component = kwargs.pop('learnt_component', None)
 
 
 class scaling(object):
@@ -620,7 +622,7 @@ class OSQP(object):
         else:
             print('')
         print(
-            '          sigma = %.2e, alpha = %.2f, ' % (settings.sigma, settings.alpha),
+            '          sigma = %.2e, alpha_x = %.2f, alpha_z = %.2f, ' % (settings.sigma, settings.alpha_x, settings.alpha_z),
             end='',
         )
         print('max_iter = %d' % settings.max_iter)
@@ -698,8 +700,8 @@ class OSQP(object):
         Update x variable in second ADMM step
         """
         self.work.x = (
-            self.work.settings.alpha * self.work.xz_tilde[: self.work.data.n]
-            + (1.0 - self.work.settings.alpha) * self.work.x_prev
+            self.work.settings.alpha_x * self.work.xz_tilde[: self.work.data.n]
+            + (1.0 - self.work.settings.alpha_x) * self.work.x_prev
         )
         self.work.delta_x = self.work.x - self.work.x_prev
 
@@ -720,8 +722,8 @@ class OSQP(object):
         Update z variable in second ADMM step
         """
         self.work.z = (
-            self.work.settings.alpha * self.work.xz_tilde[self.work.data.n :]
-            + (1.0 - self.work.settings.alpha) * self.work.z_prev
+            self.work.settings.alpha_z * self.work.xz_tilde[self.work.data.n :]
+            + (1.0 - self.work.settings.alpha_z) * self.work.z_prev
             + self.work.rho_inv_vec * self.work.y
         )
 
@@ -732,8 +734,8 @@ class OSQP(object):
         Third ADMM step: update dual variable y
         """
         self.work.delta_y = self.work.rho_vec * (
-            self.work.settings.alpha * self.work.xz_tilde[self.work.data.n :]
-            + (1.0 - self.work.settings.alpha) * self.work.z_prev
+            self.work.settings.alpha_z * self.work.xz_tilde[self.work.data.n :]
+            + (1.0 - self.work.settings.alpha_z) * self.work.z_prev
             - self.work.z
         )
         self.work.y += self.work.delta_y
@@ -1187,10 +1189,20 @@ class OSQP(object):
         Returns dict with x, y, z, Ax, pri_res, dua_res
         """
         Ax = self.work.data.A.dot(self.work.x)
+        if type(self.work.settings.alpha_x) is float:
+            alpha_x = np.array([self.work.settings.alpha_x] * self.work.data.n)
+        else:
+            alpha_x = np.copy(self.work.settings.alpha_x)
+        if type(self.work.settings.alpha_z) is float:
+            alpha_z = np.array([self.work.settings.alpha_z] * self.work.data.m)
+        else:
+            alpha_z = np.copy(self.work.settings.alpha_z)
         return {
             'x': np.copy(self.work.x),
             'y': np.copy(self.work.y),
             'z': np.copy(self.work.z),
+            'alpha_x': alpha_x,
+            'alpha_z': alpha_z,
             'Ax': Ax,
             'pri_res': self.work.info.pri_res if hasattr(self.work.info, 'pri_res') else np.inf * np.ones(self.work.data.m),
             'pri_res_vec': np.copy(self.work.info.pri_res_vec) if hasattr(self.work.info, 'pri_res_vec') else np.inf * np.ones(self.work.data.m),
@@ -1243,8 +1255,8 @@ class OSQP(object):
         # Flag indicating that the update_time should be set to zero
         self.work.clear_update_time = 0
 
-        # RL: Initialize perturbation callback to None
-        self.work.perturbation_callback = None
+        # RL: Initialize learnt component callback and mode
+        self.work.learnt_component_callback = None
 
         # Settings
         self.work.settings = settings(**stgs)
@@ -1301,6 +1313,15 @@ class OSQP(object):
             self.work.x_prev = np.copy(self.work.x)
             self.work.z_prev = np.copy(self.work.z)
 
+            # RL ALPHA: Update alpha before ADMM steps if in alpha mode
+            if hasattr(self.work, 'learnt_component_callback') and self.work.settings.learnt_component == 'alpha':
+                try:
+                    alpha_z_new = self.work.learnt_component_callback()
+                    if alpha_z_new is not None:
+                        self.update_alpha_z(alpha_z_new)
+                except Exception as e:
+                    print(f"Warning: Alpha callback failed: {e}")
+
             # Admm steps
             # First step: update \tilde{x} and \tilde{z}
             self.update_xz_tilde()
@@ -1313,19 +1334,16 @@ class OSQP(object):
             # Third step: update y
             self.update_y()
 
-            # RL PERTURBATION: Apply perturbations if callback is set
-            if hasattr(self.work, 'perturbation_callback') and self.work.perturbation_callback is not None:
+            # RL PERTURBATION: Apply perturbations if in perturbation mode
+            if hasattr(self.work, 'learnt_component_callback') and self.work.settings.learnt_component == 'perturbation':
                 try:
-                    delta_z, delta_y = self.work.perturbation_callback() # TODO: revise perturbation to y and z
+                    delta_z, delta_y = self.work.learnt_component_callback()
                     if delta_z is not None:
                         self.work.z = self.work.z + delta_z.reshape(-1)
-                    if delta_y is not None: # supports broadcasting
+                    if delta_y is not None:
                         self.work.y = self.work.y + delta_y.reshape(-1)
                 except Exception as e:
-                    # If callback fails, just continue without perturbation
-                    if self.work.settings.verbose:
-                        print(f"Warning: Perturbation callback failed: {e}")
-                    pass
+                    print(f"Warning: Perturbation callback failed: {e}")
 
             if self.work.settings.check_termination:
                 # Update info
@@ -1707,10 +1725,23 @@ class OSQP(object):
         """
         Update relaxation parameter alpga
         """
-        if not (alpha_new >= 0 | alpha_new <= 2):
+        if type(alpha_new) is float and not (alpha_new >= 0 | alpha_new <= 2):
+            raise ValueError('alpha must be between 0 and 2')
+        elif not (np.logical_and(np.all(alpha_new >= 0), np.all(alpha_new <= 2))):
             raise ValueError('alpha must be between 0 and 2')
 
         self.work.settings.alpha = alpha_new
+
+    def update_alpha_z(self, alpha_z_new):
+        """
+        Update relaxation parameter alpga
+        """
+        if type(alpha_z_new) is float and not (alpha_z_new >= 0 | alpha_z_new <= 2):
+            raise ValueError('alpha must be between 0 and 2')
+        elif not (np.logical_and(np.all(alpha_z_new >= 0), np.all(alpha_z_new <= 2))):
+            raise ValueError('alpha must be between 0 and 2')
+
+        self.work.settings.alpha_z = alpha_z_new
 
     def update_delta(self, delta_new):
         """
