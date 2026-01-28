@@ -1725,7 +1725,7 @@ class OSQP(object):
         """
         Update relaxation parameter alpga
         """
-        if type(alpha_new) is float and not (alpha_new >= 0 | alpha_new <= 2):
+        if type(alpha_new) is float and not (np.logical_and(alpha_new >= 0, alpha_new <= 2)):
             raise ValueError('alpha must be between 0 and 2')
         elif not (np.logical_and(np.all(alpha_new >= 0), np.all(alpha_new <= 2))):
             raise ValueError('alpha must be between 0 and 2')
@@ -1736,7 +1736,7 @@ class OSQP(object):
         """
         Update relaxation parameter alpga
         """
-        if type(alpha_z_new) is float and not (alpha_z_new >= 0 | alpha_z_new <= 2):
+        if type(alpha_z_new) is float and not (np.logical_and(alpha_z_new >= 0, alpha_z_new <= 2)):
             raise ValueError('alpha must be between 0 and 2')
         elif not (np.logical_and(np.all(alpha_z_new >= 0), np.all(alpha_z_new <= 2))):
             raise ValueError('alpha must be between 0 and 2')
