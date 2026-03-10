@@ -114,3 +114,6 @@ ENV/
 # mypy
 .mypy_cache/
 *~
+
+.vscode/
+learned_osqp/data

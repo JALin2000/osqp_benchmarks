@@ -67,7 +67,8 @@ class RandomQPExample(object):
 
     def revert_cvxpy_solution(self):
         '''
-        Get QP primal and duar variables from cvxpy solution
+        Get QP primal and dual variables from cvxpy solution.
+        Returns (x, y, z) where z = A @ x (primal feasibility: Ax = z at optimum).
         '''
 
         variables = self.cvxpy_problem.variables()
@@ -79,4 +80,7 @@ class RandomQPExample(object):
         # dual solution
         y = constraints[0].dual_value - constraints[1].dual_value
 
-        return x, y
+        # slack variable: z* = A x* at optimality
+        z = self.A @ x
+
+        return x, y, z

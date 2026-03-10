@@ -426,7 +426,7 @@ settings = {
        OSQP_python:{
              'max_iter': int(1e4),
              'eps_abs': eps_low,
-             'eps_rel': 0.0,
+             'eps_rel': eps_low,
              'polish': False,
              'verbose': False,
              'eps_prim_inf': 1e-15,  # Disable infeas check
@@ -435,7 +435,7 @@ settings = {
        OSQP_python_high:{
              'max_iter': int(1e4),
              'eps_abs': eps_high,
-             'eps_rel': 0.0,
+             'eps_rel': eps_high,
              'polish': False,
              'verbose': False,
              'eps_prim_inf': 1e-15,  # Disable infeas check
