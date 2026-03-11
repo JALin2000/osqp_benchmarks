@@ -104,8 +104,7 @@ def _osqp_converged_batched(
     d_inv: torch.Tensor,  # (B, n)     D^{-1} diagonal
     e_inv: torch.Tensor,  # (B, m)     E^{-1} diagonal
     c_inv: torch.Tensor,  # (B,)       1 / c_scale
-    eps_abs: float = 3e-4,
-    eps_rel: float = 3e-4,
+    cfg: 'Config',
 ) -> torch.Tensor:
     """
     OSQP SOLVED criterion with unscaling (batched, no_grad).
@@ -133,11 +132,11 @@ def _osqp_converged_batched(
     dua_res_unc = c_inv_u * d_inv * (Px + q + ATy)                      # (B, n)
 
     # Tolerances in original (unscaled) space
-    eps_pri = eps_abs + eps_rel * torch.maximum(
+    eps_pri = cfg.eps_abs + cfg.eps_rel * torch.maximum(
         (e_inv * Ax).abs().amax(dim=1),
         (e_inv * z).abs().amax(dim=1),
     )                                                                     # (B,)
-    eps_dua = eps_abs + eps_rel * torch.stack([
+    eps_dua = cfg.eps_abs + cfg.eps_rel * torch.stack([
         (c_inv_u * d_inv * ATy).abs().amax(dim=1),
         (c_inv_u * d_inv * Px).abs().amax(dim=1),
         (c_inv_u * d_inv * q).abs().amax(dim=1),
@@ -172,9 +171,13 @@ def train_epoch(
     all_iters: list[float] = []
     all_rho: list[float] = []
 
+    dtype = cfg.torch_dtype
+
     for batch in loader:
         batch = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            k: (v.to(device=device, dtype=dtype) if v.is_floating_point()
+                else v.to(device=device))
+            if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
 
@@ -197,7 +200,6 @@ def train_epoch(
         B = P.shape[0]
         n = P.shape[1]
         m = A.shape[1]
-        dtype = P.dtype
 
         x = torch.zeros(B, n, dtype=dtype, device=device)
         z = torch.zeros(B, m, dtype=dtype, device=device)
@@ -225,7 +227,7 @@ def train_epoch(
 
         for stage in range(cfg.max_stages):
             with torch.no_grad():
-                active = convergence_mask(x, x_star, cfg)
+                active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
                 if not active.any():
                     break
 
@@ -249,7 +251,8 @@ def train_epoch(
                 )
                 if loss_type == "scaled_residual":
                     loss_i = scaled_residual_loss(
-                        x_new, z_new, y_new, x, z, y, _batch_data, mask=active)
+                        x_new, z_new, y_new, x, z, y, _batch_data, mask=active,
+                        eps_abs=cfg.eps_abs, eps_rel=cfg.eps_rel)
                 else:
                     loss_i = log_convergence_loss(
                         x_new=x_new, x_prev=x, x_star=x_star,
@@ -271,7 +274,7 @@ def train_epoch(
 
             with torch.no_grad():
                 newly = _osqp_converged_batched(
-                    P, A, q, x, z, y, d_inv, e_inv, c_inv) & ~osqp_done
+                    P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg) & ~osqp_done
                 osqp_iters[newly] = float((stage + 1) * cfg.T)
                 osqp_done |= newly
 
@@ -327,9 +330,13 @@ def val_epoch(
     all_iters: list[float] = []
     all_rho:   list[float] = []
 
+    dtype = cfg.torch_dtype
+
     for batch in loader:
         batch = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            k: (v.to(device=device, dtype=dtype) if v.is_floating_point()
+                else v.to(device=device))
+            if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
 
@@ -351,7 +358,6 @@ def val_epoch(
 
         B, n = P.shape[0], P.shape[1]
         m = A.shape[1]
-        dtype = P.dtype
 
         x = torch.zeros(B, n, dtype=dtype, device=device)
         z = torch.zeros(B, m, dtype=dtype, device=device)
@@ -374,7 +380,7 @@ def val_epoch(
         y_prev = torch.zeros(B, m, dtype=dtype, device=device)
 
         for stage in range(cfg.max_stages):
-            active = convergence_mask(x, x_star, cfg)
+            active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
             if not active.any():
                 break
 
@@ -394,7 +400,8 @@ def val_epoch(
                 loss_i = spectral_radius_loss(z, alpha_z, _batch_data, cfg)
             elif loss_type == "scaled_residual":
                 loss_i = scaled_residual_loss(
-                    x_new, z_new, y_new, x, z, y, _batch_data, mask=active)
+                    x_new, z_new, y_new, x, z, y, _batch_data, mask=active,
+                    eps_abs=cfg.eps_abs, eps_rel=cfg.eps_rel)
             else:
                 loss_i = log_convergence_loss(
                     x_new, x, x_star, y_new, y, y_star, z_new, z, z_star,
@@ -408,7 +415,7 @@ def val_epoch(
             x, z, y = x_new, z_new, y_new
 
             newly = _osqp_converged_batched(
-                P, A, q, x, z, y, d_inv, e_inv, c_inv) & ~osqp_done
+                P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg) & ~osqp_done
             osqp_iters[newly] = float((stage + 1) * cfg.T)
             osqp_done |= newly
 
@@ -467,18 +474,19 @@ def train(
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     log = _setup_logger(ckpt_path)
 
-    device = torch.device('cpu')
+    device = cfg.torch_device
 
     log.info(f"Training PerRowAlphaNet  [loss_type={loss_type}]")
     log.info(f"  n={cfg.n_fixed}, m={cfg.m_fixed}, batch_size={cfg.batch_size}")
     log.info(f"  T={cfg.T} steps/stage, max_stages={cfg.max_stages}")
     log.info(f"  alpha range: [{cfg.alpha_min}, {cfg.alpha_max}]")
+    log.info(f"  device={cfg.device}, dtype={cfg.dtype}")
     log.info(f"  checkpoint: {ckpt_path}")
 
     train_loader, val_loader = make_dataloaders(cfg, n_fixed, verbose=False)
     log.info(f"  Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
 
-    model = PerRowAlphaNet(cfg).double().to(device)
+    model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"  Model parameters: {n_params:,}")
 
@@ -561,6 +569,13 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt', type=str,
                         default='learned_osqp/checkpoints/best_model.pt',
                         help='path to save best checkpoint (.pt); .log written alongside')
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'],
+                        help='compute device')
+    parser.add_argument('--dtype', type=str, default='float64',
+                        choices=['float64', 'float32'],
+                        help='floating-point dtype (float64 recommended for KKT stability)')
+    parser.add_argument('--precision', type=str, default='low', choices=['low', 'high'],
+                        help='convergence tolerance: low → eps=1e-3, high → eps=1e-5')
     args = parser.parse_args()
 
     cfg = Config(
@@ -571,6 +586,10 @@ if __name__ == '__main__':
         T=args.T,
         max_stages=args.stages,
         n_train=args.n_train,
+        device=args.device,
+        dtype=args.dtype,
+        precision=args.precision,
+        data_path=f"learned_osqp/data/qp_dataset_n={args.n}_precision={args.precision}_dtype={args.dtype}.pt",
     )
 
     if args.regen:

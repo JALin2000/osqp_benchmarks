@@ -192,21 +192,28 @@ def evaluate(
         cfg = Config()
 
     ckpt_path = checkpoint_path or 'learned_osqp/checkpoints/best_model.pt'
-    device = torch.device('cpu')
 
     # ---- Load model ---- #
     print(f"Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
 
-    # Restore cfg from checkpoint if available
+    # Restore cfg from checkpoint if available, then apply any runtime overrides
     if 'cfg' in ckpt:
-        cfg = ckpt['cfg']
+        cfg_ckpt = ckpt['cfg']
+        # Preserve device/dtype/precision from the caller's cfg (runtime choice)
+        cfg_ckpt.device    = cfg.device
+        cfg_ckpt.dtype     = cfg.dtype
+        cfg_ckpt.precision = cfg.precision
+        cfg = cfg_ckpt
 
-    model = PerRowAlphaNet(cfg).double().to(device)
-    # model = PerRowAlphaNet(cfg).to(device)
+    device = cfg.torch_device
+    dtype  = cfg.torch_dtype
+
+    model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
     model.load_state_dict(ckpt['model_state'])
     model.eval()
     print(f"  Loaded epoch {ckpt.get('epoch', '?')}, val_loss={ckpt.get('val_loss', '?'):.4f}")
+    print(f"  device={cfg.device}, dtype={cfg.dtype}")
 
     # ---- Data ---- #
     _, val_loader = make_dataloaders(cfg, verbose=False)
@@ -227,7 +234,9 @@ def evaluate(
             break
 
         batch = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            k: (v.to(device=device, dtype=dtype) if v.is_floating_point()
+                else v.to(device=device))
+            if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
 
@@ -385,9 +394,17 @@ if __name__ == '__main__':
     parser.add_argument('--n', type=int, default=20, help='QP size n')
     parser.add_argument('--batches', type=int, default=10)
     parser.add_argument('--no-plots', action='store_true')
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'],
+                        help='compute device')
+    parser.add_argument('--dtype', type=str, default='float64',
+                        choices=['float64', 'float32'],
+                        help='floating-point dtype')
+    parser.add_argument('--precision', type=str, default='low', choices=['low', 'high'],
+                        help='convergence tolerance: low → eps=1e-3, high → eps=1e-5')
     args = parser.parse_args()
 
-    cfg = Config(n_fixed=args.n)
+    cfg = Config(n_fixed=args.n, device=args.device, dtype=args.dtype,
+                 precision=args.precision)
     evaluate(
         cfg=cfg,
         checkpoint_path=args.checkpoint,

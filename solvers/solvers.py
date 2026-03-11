@@ -6,7 +6,8 @@ from solvers.ecos import ECOSSolver
 from solvers.gurobi import GUROBISolver
 from solvers.mosek import MOSEKSolver
 from solvers.osqp import OSQPSolver
-from solvers.osqppurepy import OSQP as OSQPPythonSolver 
+from solvers.osqppurepy import OSQP as OSQPPythonSolver
+from learned_osqp.neural_osqp_solver import NeuralOSQPSolver
 # from solvers.qpoases import qpOASESSolver
 
 ECOS = 'ECOS'
@@ -52,6 +53,7 @@ Super_cg_precond_high = Super_cg_precond + '_high'
 
 OSQP_python = 'OSQP_python'
 OSQP_python_high = OSQP_python + '_high'
+OSQP_python_neural = 'OSQP_python_neural'
 
 # solvers = [ECOSSolver, GUROBISolver, MOSEKSolver, OSQPSolver]
 # SOLVER_MAP = {solver.name(): solver for solver in solvers}
@@ -95,11 +97,12 @@ SOLVER_MAP = {OSQP: OSQPSolver,
               Super_cg_precond_high: SuperADMMTricksSolver,
               OSQP_python: OSQPPythonSolver,
               OSQP_python_high: OSQPPythonSolver,
+              OSQP_python_neural: NeuralOSQPSolver,
               }
 
 time_limit = 1000. # Seconds
 eps_low = 1e-03
-eps_high = 1e-08
+eps_high = 1e-05
 
 # Solver settings
 settings = {
@@ -427,6 +430,7 @@ settings = {
              'max_iter': int(1e4),
              'eps_abs': eps_low,
              'eps_rel': eps_low,
+       #       'adaptive_rho': False,
              'polish': False,
              'verbose': False,
              'eps_prim_inf': 1e-15,  # Disable infeas check
@@ -441,6 +445,15 @@ settings = {
              'eps_prim_inf': 1e-15,  # Disable infeas check
              'eps_dual_inf': 1e-15,
              'warm_start': False
+       },
+       OSQP_python_neural: {
+             'max_iter': int(1e4),
+             'eps_abs': eps_low,
+             'eps_rel': eps_low,
+             'polish': False,
+             'verbose': False,
+             'eps_prim_inf': 1e-15,  # Disable infeas check
+             'eps_dual_inf': 1e-15,
        }
 }
 

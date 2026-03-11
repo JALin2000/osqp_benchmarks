@@ -127,27 +127,63 @@ def log_convergence_loss(
 
 
 def convergence_mask(
-    x_prev: torch.Tensor,   # (B, n) — detached
-    x_star: torch.Tensor,   # (B, n) — detached
+    P: torch.Tensor,       # (B, n, n)  SCALED
+    A: torch.Tensor,       # (B, m, n)  SCALED
+    q: torch.Tensor,       # (B, n)     SCALED
+    x: torch.Tensor,       # (B, n)     scaled iterate
+    z: torch.Tensor,       # (B, m)     scaled iterate
+    y: torch.Tensor,       # (B, m)     scaled iterate
+    d_inv: torch.Tensor,   # (B, n)     D^{-1} diagonal
+    e_inv: torch.Tensor,   # (B, m)     E^{-1} diagonal
+    c_inv: torch.Tensor,   # (B,)       1 / c_scale
     cfg: 'Config',
-) -> torch.Tensor:
+) -> torch.Tensor:         # (B,) bool — True = NOT yet converged (include in loss)
     """
     Return a (B,) bool mask: True = instance has NOT yet converged.
 
-    An instance is considered converged if ||x_prev - x*|| < convergence_tol.
-    Converged instances are excluded from the loss to avoid training on noise.
+    Mirrors the OSQP termination criterion in _osqp.py with scaled_termination=False:
 
-    Args:
-        x_prev : (B, n) primal iterate before stage (detached)
-        x_star : (B, n) optimal solution (detached)
-        cfg    : Config
+        unscaled pri_res = E^{-1} * (A_sc @ x_sc - z_sc)
+        unscaled dua_res = c^{-1} * D^{-1} * (P_sc @ x_sc + q_sc + A_sc^T @ y_sc)
+
+        eps_pri = eps_abs + eps_rel * max(||E^{-1} A x||_inf, ||E^{-1} z||_inf)
+        eps_dua = eps_abs + eps_rel * max(||c^{-1} D^{-1} A^T y||_inf,
+                                          ||c^{-1} D^{-1} P x||_inf,
+                                          ||c^{-1} D^{-1} q||_inf)
+
+    eps_abs and eps_rel are taken from cfg.eps_abs / cfg.eps_rel (set by cfg.precision).
 
     Returns:
-        active : (B,) bool  — True means "include in loss"
+        active : (B,) bool  — True means "not yet converged, include in loss"
     """
     with torch.no_grad():
-        err = torch.norm(x_prev - x_star, dim=1)   # (B,)
-        return err >= cfg.convergence_tol
+        Ax  = torch.bmm(A, x.unsqueeze(-1)).squeeze(-1)                    # (B, m)
+        ATy = torch.bmm(A.transpose(1, 2), y.unsqueeze(-1)).squeeze(-1)   # (B, n)
+        Px  = torch.bmm(P, x.unsqueeze(-1)).squeeze(-1)                    # (B, n)
+
+        c_inv_u = c_inv.unsqueeze(1)                                        # (B, 1)
+
+        # Unscaled residuals
+        pri_res_unc = e_inv * (Ax - z)                                      # (B, m)
+        dua_res_unc = c_inv_u * d_inv * (Px + q + ATy)                     # (B, n)
+
+        # Tolerances in original (unscaled) space
+        eps_pri = cfg.eps_abs + cfg.eps_rel * torch.maximum(
+            (e_inv * Ax).abs().amax(dim=1),
+            (e_inv * z).abs().amax(dim=1),
+        )                                                                    # (B,)
+        eps_dua = cfg.eps_abs + cfg.eps_rel * torch.stack([
+            (c_inv_u * d_inv * ATy).abs().amax(dim=1),
+            (c_inv_u * d_inv * Px).abs().amax(dim=1),
+            (c_inv_u * d_inv * q).abs().amax(dim=1),
+        ], dim=1).amax(dim=1)                                               # (B,)
+
+        converged = (
+            pri_res_unc.abs().amax(dim=1) < eps_pri
+        ) & (
+            dua_res_unc.abs().amax(dim=1) < eps_dua
+        )
+        return ~converged   # True = still active (not yet converged)
 
 
 def primal_residual(

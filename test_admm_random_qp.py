@@ -34,9 +34,9 @@ print('small test:', small_test)
 
 # Configure solvers
 if high_accuracy:
-    solvers = [s.ADMM_high, 
-               s.OSQP_high, s.OSQP_polish_high, 
-            #    s.SuperADMM_high, 
+    solvers = [s.ADMM_high,
+               s.OSQP_high, s.OSQP_polish_high,
+            #    s.SuperADMM_high,
             #    s.Super_ruiz_high,
             # #    s.Super_ruiz_kaczmarz_high,
             #    s.Super_ruiz_ldlt_high,
@@ -54,20 +54,12 @@ if high_accuracy:
     for key in s.settings:
         s.settings[key]['high_accuracy'] = True
 else:
-    solvers = [# s.ADMM, 
-               s.OSQP, s.OSQP_polish, 
-               s.SuperADMM, 
-               s.Super_ruiz,
-               s.Super_ruiz_ldlt,
-               s.Super_ruiz_new_fact,
-               s.Super_ruiz_cg,
-               s.Super_ruiz_cg_precond,
-            #    s.Super_ldlt,
-            #    s.Super_new_fact,
-            #    s.Super_cg,
-            #    s.Super_cg_precond,
+    solvers = [s.OSQP_python,
+               s.OSQP_python_neural,
+               # s.ADMM,
+               # s.OSQP, s.OSQP_polish,
                ]
-    OUTPUT_FOLDER = 'ablation_study_high_dim'
+    OUTPUT_FOLDER = 'neural_osqp_comparison_high_dim_test'
 
 if verbose:
     for key in s.settings:
@@ -96,18 +88,18 @@ problems = [
             # 'Eq QP',
             # 'Portfolio',
             #'Lasso',
-            #'SVM',
+            # 'SVM',
             #'Huber',
             # 'Control'
             ]
 
 problem_dimensions = {# 'Random QP': gen_int_log_space(300, 100, 1),
-                      'Random QP': gen_int_log_space(10, 50, n_dim),
+                      'Random QP': gen_int_log_space(80, 50, n_dim),
                     #   'Random QP': gen_int_log_space(200, 50, 2),
                       'Eq QP': gen_int_log_space(10, 200, n_dim),
                       'Portfolio': gen_int_log_space(5, 10, 5),
                       'Lasso': gen_int_log_space(10, 50, n_dim),
-                      'SVM': gen_int_log_space(10, 50, n_dim),
+                      'SVM': gen_int_log_space(5, 10, 3),
                       'Huber': gen_int_log_space(10, 50, n_dim),
                       'Control': gen_int_log_space(10, 50, n_dim)}
 
@@ -156,9 +148,12 @@ print("="*80 + "\n")
 #     high_accuracy=high_accuracy
 # )
 
-compute_stats_info(solvers, OUTPUT_FOLDER,
-                   problems=problems,
-                   high_accuracy=high_accuracy)
+try:
+    compute_stats_info(solvers, OUTPUT_FOLDER,
+                       problems=problems,
+                       high_accuracy=high_accuracy)
+except FileNotFoundError as e:
+    print("Note: compute_stats_info skipped (missing baseline files): %s" % e)
 
 print("\n" + "="*80)
 print("✓ ADMM Test Completed!")

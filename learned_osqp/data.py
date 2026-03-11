@@ -113,7 +113,7 @@ def compute_baseline_stats(instance: dict, cfg: Config, alpha: float = 1.6) -> t
 
     iters_to_converge = max_iters
     rho_updates = 0
-    eps_abs, eps_rel = 3e-4, 3e-4
+    eps_abs, eps_rel = cfg.eps_abs, cfg.eps_rel
 
     # Scaling params for unscaled convergence check (all in scaled space)
     d_inv = instance['d_inv'].unsqueeze(0)   # (1, n)

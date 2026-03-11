@@ -5,6 +5,7 @@ All modules import Config from here. Change values here to tune the pipeline.
 """
 
 from dataclasses import dataclass, field
+import torch
 
 
 # Constants mirroring _osqp.py
@@ -46,7 +47,6 @@ class Config:
     # ------------------------------------------------------------------ #
     T: int = 10                  # OSQP iterations per stage
     max_stages: int = 300         # Maximum stages per training episode
-    convergence_tol: float = 1e-5   # ||x - x*|| < tol → skip stage
 
     # ------------------------------------------------------------------ #
     # Network architecture
@@ -75,9 +75,35 @@ class Config:
     results_dir: str = 'learned_osqp/results'
 
     # ------------------------------------------------------------------ #
-    # Dtype
+    # Device and dtype
     # ------------------------------------------------------------------ #
-    dtype: str = 'float64'       # Must be float64 for KKT numerical stability?
+    device: str = 'cpu'          # 'cpu' or 'cuda'
+    dtype: str = 'float64'       # 'float64' or 'float32'
+
+    # ------------------------------------------------------------------ #
+    # Precision (OSQP convergence tolerance)
+    # ------------------------------------------------------------------ #
+    precision: str = 'low'       # 'low' → eps=1e-3; 'high' → eps=1e-5
+
+    @property
+    def eps_abs(self) -> float:
+        """Absolute convergence tolerance (eps_abs for OSQP)."""
+        return 1e-5 if self.precision == 'high' else 1e-3
+
+    @property
+    def eps_rel(self) -> float:
+        """Relative convergence tolerance (eps_rel for OSQP)."""
+        return 1e-5 if self.precision == 'high' else 1e-3
+
+    @property
+    def torch_dtype(self) -> torch.dtype:
+        """Return the torch dtype corresponding to the dtype string."""
+        return torch.float32 if self.dtype == 'float32' else torch.float64
+
+    @property
+    def torch_device(self) -> torch.device:
+        """Return the torch device corresponding to the device string."""
+        return torch.device(self.device)
 
     @property
     def m_fixed(self) -> int:
