@@ -4,7 +4,7 @@
 #SBATCH --output=slurm-%A_%a.out       # %A = master jobid, %a = array index
 #SBATCH --error=slurm-%A_%a.err
 #SBATCH --time=24:00:00                # walltime (adjust as needed)
-#SBATCH --partition=compute            # change to your CPU partition name
+#SBATCH --partition=medium            # change to your CPU partition name
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
