@@ -31,7 +31,7 @@ if _REPO_ROOT not in sys.path:
 
 from learned_osqp.config import Config
 from learned_osqp.model import PerRowAlphaNet
-from learned_osqp.data import make_dataloaders, collate_fn
+from learned_osqp.data import make_dataloaders_multi
 from learned_osqp.features import compute_per_row_features
 from learned_osqp.osqp_torch import (
     factorize_kkt,
@@ -216,7 +216,9 @@ def evaluate(
     print(f"  device={cfg.device}, dtype={cfg.dtype}")
 
     # ---- Data ---- #
-    _, val_loader = make_dataloaders(cfg, verbose=False)
+    import itertools
+    type_loaders = make_dataloaders_multi(cfg, verbose=False)
+    val_loader = itertools.chain(*[v[1] for v in type_loaders.values()])
 
     # ---- Evaluation ---- #
     report_steps = [s - 1 for s in [10, 20, 50, T_total] if s <= T_total]

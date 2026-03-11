@@ -45,7 +45,8 @@ if _REPO_ROOT not in sys.path:
 
 from learned_osqp.config import Config
 from learned_osqp.model import PerRowAlphaNet
-from learned_osqp.data import make_dataloaders
+import itertools
+from learned_osqp.data import make_dataloaders_multi, dataset_path
 from learned_osqp.features import compute_per_row_features
 from learned_osqp.osqp_torch import (
     factorize_kkt,
@@ -76,17 +77,20 @@ def _setup_logger(log_path: Path) -> logging.Logger:
     return logger
 
 
-def _baseline_stats_from_loader(loader) -> tuple[float, float, float, float]:
+def _baseline_stats_from_loader(loader_or_list) -> tuple[float, float, float, float]:
     """
     Collect precomputed baseline_iters / baseline_rho_updates from the dataset.
+    Accepts a single DataLoader or a list of DataLoaders.
     Returns (iters_mean, iters_std, rho_mean, rho_std).
     """
+    loaders = loader_or_list if isinstance(loader_or_list, list) else [loader_or_list]
     all_iters: list[float] = []
     all_rho:   list[float] = []
-    for batch in loader:
-        if 'baseline_iters' in batch:
-            all_iters.extend(batch['baseline_iters'].tolist())
-            all_rho.extend(batch['baseline_rho_updates'].tolist())
+    for loader in loaders:
+        for batch in loader:
+            if 'baseline_iters' in batch:
+                all_iters.extend(batch['baseline_iters'].tolist())
+                all_rho.extend(batch['baseline_rho_updates'].tolist())
     if not all_iters:
         return float('nan'), float('nan'), float('nan'), float('nan')
     ia = np.array(all_iters, dtype=float)
@@ -152,7 +156,7 @@ def _osqp_converged_batched(
 
 def train_epoch(
     model: PerRowAlphaNet,
-    loader,
+    loaders,
     optimizer: torch.optim.Optimizer,
     cfg: Config,
     device: torch.device,
@@ -160,20 +164,45 @@ def train_epoch(
 ) -> tuple[float, float, float, float, float]:
     """Run one training epoch.
 
+    ``loaders`` may be a single DataLoader or a list of DataLoaders (one per QP
+    type).  When a list is given batches are iterated in round-robin order so
+    every type contributes equally within the epoch.
+
     Returns:
-        (mean_loss, iters_mean, iters_std, rho_updates_mean, rho_updates_std)
-        iters: OSQP steps to convergence per instance (capped at max_stages*T).
-        rho_updates: number of rho updates per instance across all stages.
+        (mean_loss, iters_mean, iters_std, rho_updates_mean, rho_updates_std,
+         alpha_mean, alpha_std)
     """
     model.train()
     total_loss = 0.0
     n_batches = 0
     all_iters: list[float] = []
     all_rho: list[float] = []
+    alpha_sum = alpha_sum_sq = 0.0
+    alpha_count = 0
 
     dtype = cfg.torch_dtype
 
-    for batch in loader:
+    # Build a single iterable: round-robin across all loaders each epoch
+    if isinstance(loaders, list):
+        loader_iters = [iter(l) for l in loaders]
+        sentinel = object()
+
+        def _round_robin():
+            active = list(range(len(loader_iters)))
+            while active:
+                remaining = []
+                for i in active:
+                    item = next(loader_iters[i], sentinel)
+                    if item is not sentinel:
+                        remaining.append(i)
+                        yield item
+                active = remaining
+
+        iterable = _round_robin()
+    else:
+        iterable = loaders
+
+    for batch in iterable:
         batch = {
             k: (v.to(device=device, dtype=dtype) if v.is_floating_point()
                 else v.to(device=device))
@@ -226,14 +255,24 @@ def train_epoch(
         y_prev = torch.zeros(B, m, dtype=dtype, device=device)
 
         for stage in range(cfg.max_stages):
-            with torch.no_grad():
-                active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
-                if not active.any():
-                    break
+            # Skip convergence check at stage 0: x=z=y=0 can give spurious
+            # convergence (e.g. when q=0 as in control QPs).
+            if stage > 0:
+                with torch.no_grad():
+                    active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
+                    if not active.any():
+                        break
+            else:
+                active = torch.ones(B, dtype=torch.bool, device=device)
 
             features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
                                                 x_prev, z_prev, y_prev)
             alpha_z = model(features)
+            with torch.no_grad():
+                _az = alpha_z.detach()
+                alpha_sum    += _az.sum().item()
+                alpha_sum_sq += (_az ** 2).sum().item()
+                alpha_count  += _az.numel()
 
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
                            'rho_vec': rho_vec, 'rho_inv': rho_inv,
@@ -302,9 +341,15 @@ def train_epoch(
 
     iters_arr = np.array(all_iters) if all_iters else np.array([float('nan')])
     rho_arr   = np.array(all_rho)   if all_rho   else np.array([float('nan')])
+    if alpha_count > 0:
+        alpha_mean = alpha_sum / alpha_count
+        alpha_std  = (max(alpha_sum_sq / alpha_count - alpha_mean ** 2, 0.0)) ** 0.5
+    else:
+        alpha_mean = alpha_std = float('nan')
     return (total_loss / max(n_batches, 1),
             float(iters_arr.mean()), float(iters_arr.std()),
-            float(rho_arr.mean()),   float(rho_arr.std()))
+            float(rho_arr.mean()),   float(rho_arr.std()),
+            alpha_mean, alpha_std)
 
 
 # --------------------------------------------------------------------------- #
@@ -314,25 +359,32 @@ def train_epoch(
 @torch.no_grad()
 def val_epoch(
     model: PerRowAlphaNet,
-    loader,
+    loaders,
     cfg: Config,
     device: torch.device,
     loss_type: str = "log_convergence",
 ) -> tuple[float, float, float, float, float]:
     """Run one validation epoch.
 
+    ``loaders`` may be a single DataLoader or a list of DataLoaders.
+
     Returns:
-        (mean_loss, iters_mean, iters_std, rho_updates_mean, rho_updates_std)
+        (mean_loss, iters_mean, iters_std, rho_updates_mean, rho_updates_std,
+         alpha_mean, alpha_std)
     """
     model.eval()
     total_loss = 0.0
     n_batches = 0
     all_iters: list[float] = []
     all_rho:   list[float] = []
+    alpha_sum = alpha_sum_sq = 0.0
+    alpha_count = 0
 
     dtype = cfg.torch_dtype
 
-    for batch in loader:
+    iterable = itertools.chain(*loaders) if isinstance(loaders, list) else loaders
+
+    for batch in iterable:
         batch = {
             k: (v.to(device=device, dtype=dtype) if v.is_floating_point()
                 else v.to(device=device))
@@ -380,13 +432,21 @@ def val_epoch(
         y_prev = torch.zeros(B, m, dtype=dtype, device=device)
 
         for stage in range(cfg.max_stages):
-            active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
-            if not active.any():
-                break
+            # Skip convergence check at stage 0: x=z=y=0 can give spurious
+            # convergence (e.g. when q=0 as in control QPs).
+            if stage > 0:
+                active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
+                if not active.any():
+                    break
+            else:
+                active = torch.ones(B, dtype=torch.bool, device=device)
 
             features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
                                                 x_prev, z_prev, y_prev)
             alpha_z = model(features)
+            alpha_sum    += alpha_z.sum().item()
+            alpha_sum_sq += (alpha_z ** 2).sum().item()
+            alpha_count  += alpha_z.numel()
 
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
                            'rho_vec': rho_vec, 'rho_inv': rho_inv,
@@ -439,9 +499,15 @@ def val_epoch(
 
     iters_arr = np.array(all_iters) if all_iters else np.array([float('nan')])
     rho_arr   = np.array(all_rho)   if all_rho   else np.array([float('nan')])
+    if alpha_count > 0:
+        alpha_mean = alpha_sum / alpha_count
+        alpha_std  = (max(alpha_sum_sq / alpha_count - alpha_mean ** 2, 0.0)) ** 0.5
+    else:
+        alpha_mean = alpha_std = float('nan')
     return (total_loss / max(n_batches, 1),
             float(iters_arr.mean()), float(iters_arr.std()),
-            float(rho_arr.mean()),   float(rho_arr.std()))
+            float(rho_arr.mean()),   float(rho_arr.std()),
+            alpha_mean, alpha_std)
 
 
 # --------------------------------------------------------------------------- #
@@ -450,7 +516,6 @@ def val_epoch(
 
 def train(
     cfg: Config | None = None,
-    n_fixed: int | None = None,
     loss_type: str = "log_convergence",
     checkpoint_path: str = 'learned_osqp/checkpoints/best_model.pt',
 ) -> PerRowAlphaNet:
@@ -477,14 +542,18 @@ def train(
     device = cfg.torch_device
 
     log.info(f"Training PerRowAlphaNet  [loss_type={loss_type}]")
-    log.info(f"  n={cfg.n_fixed}, m={cfg.m_fixed}, batch_size={cfg.batch_size}")
+    log.info(f"  qp_types={cfg.qp_types}, qp_type_sizes={cfg.qp_type_sizes}, batch_size={cfg.batch_size}")
     log.info(f"  T={cfg.T} steps/stage, max_stages={cfg.max_stages}")
     log.info(f"  alpha range: [{cfg.alpha_min}, {cfg.alpha_max}]")
-    log.info(f"  device={cfg.device}, dtype={cfg.dtype}")
+    log.info(f"  device={cfg.device}, dtype={cfg.dtype}, precision={cfg.precision}")
     log.info(f"  checkpoint: {ckpt_path}")
 
-    train_loader, val_loader = make_dataloaders(cfg, n_fixed, verbose=False)
-    log.info(f"  Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+    type_loaders = make_dataloaders_multi(cfg, verbose=True)
+    train_loaders = [v[0] for v in type_loaders.values()]
+    val_loaders   = [v[1] for v in type_loaders.values()]
+    n_tr = sum(len(l) for l in train_loaders)
+    n_va = sum(len(l) for l in val_loaders)
+    log.info(f"  Total train batches: {n_tr}, Total val batches: {n_va}")
 
     model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -498,8 +567,8 @@ def train(
     )
 
     # Log precomputed baseline (alpha=1.6) stats once for reference
-    bl_tr_im, bl_tr_is, bl_tr_rm, bl_tr_rs = _baseline_stats_from_loader(train_loader)
-    bl_val_im, bl_val_is, bl_val_rm, bl_val_rs = _baseline_stats_from_loader(val_loader)
+    bl_tr_im, bl_tr_is, bl_tr_rm, bl_tr_rs = _baseline_stats_from_loader(train_loaders)
+    bl_val_im, bl_val_is, bl_val_rm, bl_val_rs = _baseline_stats_from_loader(val_loaders)
     log.info(
         f"Baseline (alpha=1.6)  "
         f"train_iters={bl_tr_im:.1f}±{bl_tr_is:.1f}  "
@@ -509,14 +578,15 @@ def train(
     )
 
     best_val_loss = float('inf')
+    best_val_iters_m = float('inf')
     t0 = time.time()
 
     for epoch in range(1, cfg.n_epochs + 1):
         t_ep = time.time()
-        train_loss, tr_iters_m, tr_iters_s, tr_rho_m, tr_rho_s = train_epoch(
-            model, train_loader, optimizer, cfg, device, loss_type)
-        val_loss, val_iters_m, val_iters_s, val_rho_m, val_rho_s = val_epoch(
-            model, val_loader, cfg, device, loss_type)
+        train_loss, tr_iters_m, tr_iters_s, tr_rho_m, tr_rho_s, tr_alpha_m, tr_alpha_s = train_epoch(
+            model, train_loaders, optimizer, cfg, device, loss_type)
+        val_loss, val_iters_m, val_iters_s, val_rho_m, val_rho_s, val_alpha_m, val_alpha_s = val_epoch(
+            model, val_loaders, cfg, device, loss_type)
         scheduler.step()
 
         elapsed = time.time() - t_ep
@@ -528,20 +598,23 @@ def train(
             f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
             f"train_iters={tr_iters_m:.1f}±{tr_iters_s:.1f}  "
             f"val_iters={val_iters_m:.1f}±{val_iters_s:.1f}  "
+            f"train_alpha={tr_alpha_m:.3f}±{tr_alpha_s:.3f}  "
+            f"val_alpha={val_alpha_m:.3f}±{val_alpha_s:.3f}  "
             f"train_rho_updates={tr_rho_m:.2f}±{tr_rho_s:.2f}  "
             f"val_rho_updates={val_rho_m:.2f}±{val_rho_s:.2f}  "
             f"lr={lr_current:.2e}  "
             f"ep={elapsed:.1f}s  total={total_elapsed/60:.1f}min"
         )
 
-        if val_loss < best_val_loss:
+        if val_iters_m < best_val_iters_m:
             best_val_loss = val_loss
+            best_val_iters_m = val_iters_m
             torch.save(
                 {'epoch': epoch, 'model_state': model.state_dict(),
-                 'val_loss': best_val_loss, 'cfg': cfg},
+                 'val_loss': best_val_loss, 'cfg': cfg, 'val_iters_m': val_iters_m, 'val_iters_s': val_iters_s,},
                 str(ckpt_path),
             )
-            log.info(f"  -> saved checkpoint (val_loss={best_val_loss:.4f})")
+            log.info(f"  -> saved checkpoint (val_iters_m={best_val_iters_m:.4f})")
 
     log.info(f"Training complete. Best val_loss={best_val_loss:.4f}")
     return model
@@ -555,20 +628,26 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Train PerRowAlphaNet for OSQP')
-    parser.add_argument('--n', type=int, default=20, help='QP problem size n')
+    parser.add_argument('--n', type=int, default=100,
+                        help='Size parameter for random_qp (used when --types is not set)')
+    parser.add_argument('--types', type=str, default=None,
+                        help='Comma-separated QP types, e.g. "random_qp,control,lasso". '
+                             'Supported: random_qp, control, eq_qp, huber, lasso, portfolio')
+    parser.add_argument('--sizes', type=str, default=None,
+                        help='Comma-separated size params matching --types, e.g. "20,10,3". '
+                             'If omitted, --n is used for all types.')
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch', type=int, default=10)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--T', type=int, default=10, help='steps per stage')
-    parser.add_argument('--stages', type=int, default=300, help='max stages')
+    parser.add_argument('--stages', type=int, default=1000, help='max stages')
     parser.add_argument('--n_train', type=int, default=50)
-    parser.add_argument('--regen', action='store_true', help='regenerate dataset')
+    parser.add_argument('--regen', action='store_true', help='regenerate dataset(s)')
     parser.add_argument('--loss', type=str, default='log_convergence',
                         choices=['log_convergence', 'spectral_radius', 'scaled_residual'],
                         help='loss function to use')
-    parser.add_argument('--ckpt', type=str,
-                        default='learned_osqp/checkpoints/best_model.pt',
-                        help='path to save best checkpoint (.pt); .log written alongside')
+    parser.add_argument('--ckpt', type=str, default=None,
+                        help='path to save best checkpoint (.pt); .log written alongside. If not set, see below for default naming based on --types.')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'],
                         help='compute device')
     parser.add_argument('--dtype', type=str, default='float64',
@@ -576,7 +655,24 @@ if __name__ == '__main__':
                         help='floating-point dtype (float64 recommended for KKT stability)')
     parser.add_argument('--precision', type=str, default='low', choices=['low', 'high'],
                         help='convergence tolerance: low → eps=1e-3, high → eps=1e-5')
+    parser.add_argument('--adaptive_rho', type=lambda x: x.lower() != 'false',
+                        default=True, metavar='BOOL',
+                        help='enable adaptive rho updates (default: True); pass false to disable')
     args = parser.parse_args()
+
+    # Parse types and per-type size parameters
+    if args.types:
+        types_list = [t.strip() for t in args.types.split(',')]
+        if args.sizes:
+            sizes_list = [int(s.strip()) for s in args.sizes.split(',')]
+            if len(sizes_list) != len(types_list):
+                parser.error('--sizes must have the same number of entries as --types')
+        else:
+            sizes_list = [args.n] * len(types_list)
+        qp_type_sizes = dict(zip(types_list, sizes_list))
+    else:
+        types_list = ['random_qp']
+        qp_type_sizes = {'random_qp': args.n}
 
     cfg = Config(
         n_fixed=args.n,
@@ -589,13 +685,23 @@ if __name__ == '__main__':
         device=args.device,
         dtype=args.dtype,
         precision=args.precision,
-        data_path=f"learned_osqp/data/qp_dataset_n={args.n}_precision={args.precision}_dtype={args.dtype}.pt",
+        adaptive_rho=args.adaptive_rho,
+        qp_types=types_list,
+        qp_type_sizes=qp_type_sizes,
+        data_dir='learned_osqp/data',
     )
 
     if args.regen:
-        p = Path(cfg.data_path)
-        if p.exists():
-            p.unlink()
-            print(f"Removed existing dataset at {p}")
+        for type_name in cfg.qp_types:
+            size_param = cfg.qp_type_sizes[type_name]
+            p = dataset_path(type_name, size_param, cfg)
+            if p.exists():
+                p.unlink()
+                print(f"Removed dataset: {p}")
 
-    train(cfg, loss_type=args.loss, checkpoint_path=args.ckpt)
+    if args.ckpt is None:
+        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}"
+        ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}.pt"
+    else:
+        ckpt_path = args.ckpt
+    train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)

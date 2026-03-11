@@ -80,7 +80,4 @@ class RandomQPExample(object):
         # dual solution
         y = constraints[0].dual_value - constraints[1].dual_value
 
-        # slack variable: z* = A x* at optimality
-        z = self.A @ x
-
-        return x, y, z
+        return x, y

@@ -46,7 +46,7 @@ class Config:
     # Rollout / training loop
     # ------------------------------------------------------------------ #
     T: int = 10                  # OSQP iterations per stage
-    max_stages: int = 300         # Maximum stages per training episode
+    max_stages: int = 2000         # Maximum stages per training episode
 
     # ------------------------------------------------------------------ #
     # Network architecture
@@ -70,9 +70,21 @@ class Config:
     # ------------------------------------------------------------------ #
     # Data
     # ------------------------------------------------------------------ #
-    n_fixed: int = 20            # QP primal dimension (m = 10 * n_fixed = 200)
-    data_path: str = 'learned_osqp/data/qp_dataset.pt'
+    n_fixed: int = 20            # QP primal dimension for random_qp (m = 10 * n_fixed)
+    data_dir: str = 'learned_osqp/data'
     results_dir: str = 'learned_osqp/results'
+
+    # Which QP types to include; each type needs an entry in qp_type_sizes.
+    # Supported: 'random_qp', 'control', 'eq_qp', 'huber', 'lasso', 'portfolio'
+    qp_types: list = field(default_factory=lambda: ['random_qp'])
+    # Size parameter for each type (meaning varies by type):
+    #   random_qp  → n (primal dim);  m = 10 * n
+    #   control    → nx (state dim);  n_qp = 16*nx, m_qp ≈ 32*nx
+    #   eq_qp      → n (primal dim);  m = n // 2
+    #   huber      → n_feat;          n_qp = n_feat + 3*(100*n_feat), m_qp = 3*(100*n_feat)
+    #   lasso      → n_feat;          n_qp = 2*n_feat + 100*n_feat,   m_qp = 102*n_feat
+    #   portfolio  → k (factors);     n_qp ≈ 101*k, m_qp ≈ 101*k
+    qp_type_sizes: dict = field(default_factory=lambda: {'random_qp': 20})
 
     # ------------------------------------------------------------------ #
     # Device and dtype
