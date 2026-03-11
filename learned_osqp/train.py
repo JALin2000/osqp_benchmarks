@@ -640,7 +640,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch', type=int, default=10)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--T', type=int, default=10, help='steps per stage')
-    parser.add_argument('--stages', type=int, default=1000, help='max stages')
+    parser.add_argument('--stages', type=int, default=2000, help='max stages')
     parser.add_argument('--n_train', type=int, default=50)
     parser.add_argument('--regen', action='store_true', help='regenerate dataset(s)')
     parser.add_argument('--loss', type=str, default='log_convergence',
