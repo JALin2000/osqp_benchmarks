@@ -211,6 +211,7 @@ def evaluate(
 
     model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
     model.load_state_dict(ckpt['model_state'])
+    model.feat_norm_active = ckpt.get('feat_norm_active', False)
     model.eval()
     print(f"  Loaded epoch {ckpt.get('epoch', '?')}, val_loss={ckpt.get('val_loss', '?'):.4f}")
     print(f"  device={cfg.device}, dtype={cfg.dtype}")
@@ -403,6 +404,8 @@ if __name__ == '__main__':
                         help='floating-point dtype')
     parser.add_argument('--precision', type=str, default='low', choices=['low', 'high'],
                         help='convergence tolerance: low → eps=1e-3, high → eps=1e-5')
+    parser.add_argument('--normalize_features', action='store_true',
+                        help='(informational only — normalization state is restored from checkpoint)')
     args = parser.parse_args()
 
     cfg = Config(n_fixed=args.n, device=args.device, dtype=args.dtype,

@@ -55,6 +55,8 @@ def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet:
                 break
         else:
             model.load_state_dict(state)
+        # Restore normalization flag (buffers feat_mean/feat_std already in state_dict)
+        model.feat_norm_active = state.get('feat_norm_active', False)
     else:
         model.load_state_dict(state)
     model.to(dtype=cfg.torch_dtype)

@@ -48,12 +48,81 @@ from learned_osqp.model import PerRowAlphaNet
 import itertools
 from learned_osqp.data import make_dataloaders_multi, dataset_path
 from learned_osqp.features import compute_per_row_features
+
+
 from learned_osqp.osqp_torch import (
     factorize_kkt,
     rollout_T_steps,
     maybe_update_rho,
 )
 from learned_osqp.loss import log_convergence_loss, convergence_mask, spectral_radius_loss, scaled_residual_loss
+
+
+# --------------------------------------------------------------------------- #
+# Feature normalization statistics
+# --------------------------------------------------------------------------- #
+
+def compute_feature_stats(
+    train_loaders, cfg: Config, device: torch.device, dtype: torch.dtype,
+    n_stages: int = 20,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run a short ADMM rollout on the training set (fixed alpha=1.6, no grad) and
+    collect per-row features at every stage to cover the full convergence trajectory.
+
+    Args:
+        n_stages : number of T-step ADMM stages to run per batch (default 20,
+                   i.e. 20*T total steps — enough to span early→mid→late convergence)
+
+    Returns:
+        mean : (feature_dim,) tensor
+        std  : (feature_dim,) tensor — entries with std < 1e-6 are set to 1.0
+    """
+    feat_sum = torch.zeros(cfg.feature_dim, dtype=dtype, device=device)
+    feat_sq  = torch.zeros(cfg.feature_dim, dtype=dtype, device=device)
+    count    = 0
+
+    iterable = itertools.chain(*train_loaders) if isinstance(train_loaders, list) else train_loaders
+    with torch.no_grad():
+        for batch in iterable:
+            batch = {
+                k: (v.to(device=device, dtype=dtype) if isinstance(v, torch.Tensor) and v.is_floating_point()
+                    else v.to(device=device) if isinstance(v, torch.Tensor) else v)
+                for k, v in batch.items()
+            }
+            P, A, q = batch['P'], batch['A'], batch['q']
+            l, u    = batch['l'], batch['u']
+            rho_vec = batch['rho_vec']
+            rho_inv = batch['rho_inv']
+            x_star  = batch.get('x_star', None)
+            B, m, n = A.shape
+
+            x = torch.zeros(B, n, dtype=dtype, device=device)
+            z = torch.zeros(B, m, dtype=dtype, device=device)
+            y = torch.zeros(B, m, dtype=dtype, device=device)
+            alpha_z = torch.full((B, m), 1.6, dtype=dtype, device=device)
+
+            factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+
+            for _ in range(n_stages):
+                x_prev, z_prev, y_prev = x, z, y
+
+                feat = compute_per_row_features(
+                    P, q, A, l, u, x, z, y, rho_vec, x_star,
+                    x_prev, z_prev, y_prev,
+                )  # (B, m, feature_dim)
+                flat = feat.reshape(-1, cfg.feature_dim)
+                feat_sum += flat.sum(0)
+                feat_sq  += (flat ** 2).sum(0)
+                count    += flat.shape[0]
+
+                x, z, y = rollout_T_steps(
+                    x, z, y, alpha_z, factors, batch, cfg,
+                )
+
+    mean = feat_sum / count
+    std  = (feat_sq / count - mean ** 2).clamp(min=0.0).sqrt()
+    std  = torch.where(std < 1e-6, torch.ones_like(std), std)
+    return mean, std
 
 
 # --------------------------------------------------------------------------- #
@@ -559,6 +628,13 @@ def train(
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"  Model parameters: {n_params:,}")
 
+    if cfg.normalize_features:
+        log.info("  Computing feature normalization statistics from training data...")
+        feat_mean, feat_std = compute_feature_stats(train_loaders, cfg, device, cfg.torch_dtype)
+        model.set_feature_norm(feat_mean, feat_std)
+        log.info(f"  Feature norm set  mean=[{feat_mean.min():.3f}, {feat_mean.max():.3f}]  "
+                 f"std=[{feat_std.min():.3f}, {feat_std.max():.3f}]")
+
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
@@ -611,7 +687,9 @@ def train(
             best_val_iters_m = val_iters_m
             torch.save(
                 {'epoch': epoch, 'model_state': model.state_dict(),
-                 'val_loss': best_val_loss, 'cfg': cfg, 'val_iters_m': val_iters_m, 'val_iters_s': val_iters_s,},
+                 'val_loss': best_val_loss, 'cfg': cfg,
+                 'val_iters_m': val_iters_m, 'val_iters_s': val_iters_s,
+                 'feat_norm_active': model.feat_norm_active},
                 str(ckpt_path),
             )
             log.info(f"  -> saved checkpoint (val_iters_m={best_val_iters_m:.4f})")
@@ -658,6 +736,8 @@ if __name__ == '__main__':
     parser.add_argument('--adaptive_rho', type=lambda x: x.lower() != 'false',
                         default=True, metavar='BOOL',
                         help='enable adaptive rho updates (default: True); pass false to disable')
+    parser.add_argument('--normalize_features', action='store_true',
+                        help='normalize input features to zero mean / unit std before training')
     args = parser.parse_args()
 
     # Parse types and per-type size parameters
@@ -686,9 +766,10 @@ if __name__ == '__main__':
         dtype=args.dtype,
         precision=args.precision,
         adaptive_rho=args.adaptive_rho,
+        normalize_features=args.normalize_features,
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='learned_osqp/data',
+        data_dir='$DATA',
     )
 
     if args.regen:

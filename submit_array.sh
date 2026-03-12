@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G                       # 8 GB memory per array task
-#SBATCH --array=1-6                    # array with six tasks (1..6)
+#SBATCH --array=1-12                    # array with twelve tasks (1..12)
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -22,12 +22,18 @@ export MKL_NUM_THREADS=1
 
 # ---- list your commands here (index order must match --array range) ----
 CMDS=(
-  "python learned_osqp/train.py --precision low --types random_qp --sizes 150"
-  "python learned_osqp/train.py --precision low --types random_qp --sizes 150 --adaptive_rho false"
-  "python learned_osqp/train.py --precision low --types svm --sizes 15"
-  "python learned_osqp/train.py --precision low --types svm --sizes 15 --adaptive_rho false"
-  "python learned_osqp/train.py --precision low --types control --sizes 100"
-  "python learned_osqp/train.py --precision low --types control --sizes 100 --adaptive_rho false"
+  "python learned_osqp/train.py --precision low --types random_qp --sizes 150 --normalize_features"
+  "python learned_osqp/train.py --precision low --types random_qp --sizes 150 --adaptive_rho false --normalize_features"
+  "python learned_osqp/train.py --precision low --types svm --sizes 15 --normalize_features"
+  "python learned_osqp/train.py --precision low --types svm --sizes 15 --adaptive_rho false --normalize_features"
+  "python learned_osqp/train.py --precision low --types control --sizes 100 --normalize_features"
+  "python learned_osqp/train.py --precision low --types control --sizes 100 --adaptive_rho false --normalize_features"
+  "python learned_osqp/train.py --precision high --types random_qp --sizes 150 --normalize_features"
+  "python learned_osqp/train.py --precision high --types random_qp --sizes 150 --adaptive_rho false --normalize_features"
+  "python learned_osqp/train.py --precision high --types svm --sizes 15 --normalize_features"
+  "python learned_osqp/train.py --precision high --types svm --sizes 15 --adaptive_rho false --normalize_features"
+  "python learned_osqp/train.py --precision high --types control --sizes 100 --normalize_features"
+  "python learned_osqp/train.py --precision high --types control --sizes 100 --adaptive_rho false --normalize_features"
 )
 
 # compute zero-based index for the bash array

@@ -56,6 +56,12 @@ class PerRowAlphaNet(nn.Module):
         super().__init__()
         self.cfg = cfg
 
+        # Feature normalization: buffers are saved/loaded with state_dict.
+        # feat_norm_active is saved separately in the checkpoint dict.
+        self.register_buffer('feat_mean', torch.zeros(cfg.feature_dim))
+        self.register_buffer('feat_std',  torch.ones(cfg.feature_dim))
+        self.feat_norm_active: bool = False
+
         layers: list[nn.Module] = []
         in_dim = cfg.feature_dim
 
@@ -64,7 +70,7 @@ class PerRowAlphaNet(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, cfg.hidden_dim),
                 nn.LayerNorm(cfg.hidden_dim),
-                nn.ReLU(),
+                nn.ELU(),
             ])
             in_dim = cfg.hidden_dim
 
@@ -73,6 +79,18 @@ class PerRowAlphaNet(nn.Module):
         self.hidden_net = nn.Sequential(*layers)
 
         self._init_weights()
+
+    def set_feature_norm(self, mean: torch.Tensor, std: torch.Tensor) -> None:
+        """Set per-feature normalization statistics and activate normalization.
+
+        Args:
+            mean : (feature_dim,) — per-feature mean computed from training data
+            std  : (feature_dim,) — per-feature std; near-zero entries should
+                   already be replaced with 1.0 by the caller.
+        """
+        self.feat_mean.copy_(mean.to(device=self.feat_mean.device, dtype=self.feat_mean.dtype))
+        self.feat_std.copy_(std.to(device=self.feat_std.device,   dtype=self.feat_std.dtype))
+        self.feat_norm_active = True
 
     def _init_weights(self) -> None:
         """
@@ -86,7 +104,8 @@ class PerRowAlphaNet(nn.Module):
                 nn.init.zeros_(module.bias)
 
         # Zero-init output layer → sigmoid(0) = 0.5 → alpha = 1.6
-        nn.init.zeros_(self.output_layer.weight)
+        # nn.init.zeros_(self.output_layer.weight)
+        nn.init.normal_(self.output_layer.weight, std=0.01)
         nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
@@ -97,6 +116,8 @@ class PerRowAlphaNet(nn.Module):
         Returns:
             alpha_z  : (B, m) in [cfg.alpha_min, cfg.alpha_max]
         """
+        if self.feat_norm_active:
+            features = (features - self.feat_mean) / (self.feat_std + 1e-8)
         h = self.hidden_net(features)          # (B, m, hidden_dim)
         raw = self.output_layer(h).squeeze(-1)  # (B, m)
         alpha = torch.sigmoid(raw)             # (B, m) in (0, 1)

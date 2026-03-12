@@ -87,6 +87,11 @@ class Config:
     qp_type_sizes: dict = field(default_factory=lambda: {'random_qp': 20})
 
     # ------------------------------------------------------------------ #
+    # Feature normalization
+    # ------------------------------------------------------------------ #
+    normalize_features: bool = False  # if True, normalize input features to zero mean / unit std
+
+    # ------------------------------------------------------------------ #
     # Device and dtype
     # ------------------------------------------------------------------ #
     device: str = 'cpu'          # 'cpu' or 'cuda'
