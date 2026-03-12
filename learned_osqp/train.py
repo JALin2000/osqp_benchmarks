@@ -769,7 +769,7 @@ if __name__ == '__main__':
         normalize_features=args.normalize_features,
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='$DATA',
+        data_dir='/data/engs-goulart/sedm7756',
     )
 
     if args.regen:

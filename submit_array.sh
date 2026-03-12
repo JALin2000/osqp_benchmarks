@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --chdir=$usr/osqp_benchmarks
+#SBATCH --chdir=/home/sedm7756/osqp_benchmarks
 #SBATCH --job-name=multi-cpu         # job name
 #SBATCH --output=slurm-%A_%a.out       # %A = master jobid, %a = array index
 #SBATCH --error=slurm-%A_%a.err
@@ -13,7 +13,7 @@
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
-source $HOME/miniconda3/etc/profile.d/conda.sh
+source /home/sedm7756/miniconda3/etc/profile.d/conda.sh
 conda activate rlqp
 
 # avoid oversubscription of OpenMP/MKL threads
