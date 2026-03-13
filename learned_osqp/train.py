@@ -835,7 +835,7 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
-        ckpt_path = f"learned_osqp/checkpoints/cuda_float32/{ckpt_name}.pt"
+        ckpt_path = f"learned_osqp/checkpoints/float32/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)
