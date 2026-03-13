@@ -214,6 +214,7 @@ def rollout_T_steps(
     factors: KKTFactors,    # pre-computed LU factorization, from factorize_kkt
     batch: dict,            # contains q, l, u, rho_vec, rho_inv
     cfg: 'Config',
+    alpha_x_override=None,  # (B, 1) tensor or None; overrides cfg.alpha_x when given
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Run cfg.T OSQP iterations with a fixed alpha_z.
@@ -222,11 +223,15 @@ def rollout_T_steps(
     alpha_z is held constant across all T iterations.
 
     Args:
-        x, z, y  : current OSQP iterate (B, n/m/m)
-        alpha_z  : per-row relaxation (B, m) — carries gradient
-        factors  : KKTFactors — pre-computed LU factorization from factorize_kkt
-        batch    : QP data dict
-        cfg      : Config
+        x, z, y          : current OSQP iterate (B, n/m/m)
+        alpha_z          : per-row relaxation (B, m) — carries gradient
+        factors          : KKTFactors — pre-computed LU factorization from factorize_kkt
+        batch            : QP data dict
+        cfg              : Config
+        alpha_x_override : (B, 1) tensor or scalar float; if provided, overrides
+                           cfg.alpha_x for the x-update.  Used in scalar alpha mode
+                           where the same learned value is used for both alpha_x and
+                           alpha_z.
 
     Returns:
         (x_new, z_new, y_new) after T steps
@@ -237,10 +242,12 @@ def rollout_T_steps(
     rho_vec = batch['rho_vec']
     rho_inv = batch['rho_inv']
 
+    alpha_x = alpha_x_override if alpha_x_override is not None else cfg.alpha_x
+
     for _ in range(cfg.T):
         x, z, y, _, _ = osqp_step(
             x, z, y, q, l, u, rho_vec, rho_inv,
-            factors, cfg.alpha_x, alpha_z, cfg.sigma,
+            factors, alpha_x, alpha_z, cfg.sigma,
         )
 
     return x, z, y

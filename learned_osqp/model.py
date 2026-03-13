@@ -134,3 +134,82 @@ class PerRowAlphaNet(nn.Module):
         Useful for sanity-checking the initialisation.
         """
         return torch.full((B, m), 1.6, dtype=dtype, device=device)
+
+
+class ScalarAlphaNet(nn.Module):
+    """
+    MLP mapping 5-dim global residual features → single scalar alpha per
+    problem instance.
+
+    Input shape:  (B, scalar_feature_dim)
+    Output shape: (B,)   values in [alpha_min, alpha_max]
+
+    The same scalar substitutes both alpha_x and alpha_z for every row.
+
+    Architecture mirrors PerRowAlphaNet (shared init / norm interface) but
+    operates on instance-level features rather than per-row features.
+
+    Features (see features.py compute_global_features):
+        f[0] log pri_res_inf_norm
+        f[1] log dua_res_inf_norm
+        f[2] log rho_scalar
+        f[3] log(pri_res_inf_norm / pri_res_inf_norm_prev)
+        f[4] log(dua_res_inf_norm / dua_res_inf_norm_prev)
+    """
+
+    def __init__(self, cfg: 'Config'):
+        super().__init__()
+        self.cfg = cfg
+
+        in_dim = cfg.scalar_feature_dim
+
+        # Feature normalization buffers — same interface as PerRowAlphaNet
+        self.register_buffer('feat_mean', torch.zeros(in_dim))
+        self.register_buffer('feat_std',  torch.ones(in_dim))
+        self.feat_norm_active: bool = False
+
+        layers: list[nn.Module] = []
+        for _ in range(cfg.n_layers - 1):
+            layers.extend([
+                nn.Linear(in_dim, cfg.hidden_dim),
+                nn.LayerNorm(cfg.hidden_dim),
+                nn.ELU(),
+            ])
+            in_dim = cfg.hidden_dim
+
+        self.output_layer = nn.Linear(in_dim, 1)
+        self.hidden_net = nn.Sequential(*layers)
+
+        self._init_weights()
+
+    def set_feature_norm(self, mean: torch.Tensor, std: torch.Tensor) -> None:
+        """Same interface as PerRowAlphaNet.set_feature_norm."""
+        self.feat_mean.copy_(mean.to(device=self.feat_mean.device, dtype=self.feat_mean.dtype))
+        self.feat_std.copy_(std.to(device=self.feat_std.device,   dtype=self.feat_std.dtype))
+        self.feat_norm_active = True
+
+    def _init_weights(self) -> None:
+        for module in self.hidden_net.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.5)
+                nn.init.zeros_(module.bias)
+        nn.init.normal_(self.output_layer.weight, std=0.01)
+        nn.init.zeros_(self.output_layer.bias)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            features : (B, scalar_feature_dim) — global per-instance features
+
+        Returns:
+            alpha : (B,) in [cfg.alpha_min, cfg.alpha_max]
+        """
+        if self.feat_norm_active:
+            features = (features - self.feat_mean) / (self.feat_std + 1e-8)
+        h   = self.hidden_net(features)          # (B, hidden_dim)
+        raw = self.output_layer(h).squeeze(-1)   # (B,)
+        alpha = torch.sigmoid(raw)
+        return (
+            self.cfg.alpha_min
+            + (self.cfg.alpha_max - self.cfg.alpha_min) * alpha
+        )  # (B,) in [alpha_min, alpha_max]

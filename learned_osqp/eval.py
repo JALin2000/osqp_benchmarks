@@ -30,9 +30,9 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet
+from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet
 from learned_osqp.data import make_dataloaders_multi
-from learned_osqp.features import compute_per_row_features
+from learned_osqp.features import compute_per_row_features, compute_global_features
 from learned_osqp.osqp_torch import (
     factorize_kkt,
     osqp_step,
@@ -48,7 +48,7 @@ from learned_osqp.loss import primal_residual, dual_residual
 
 @torch.no_grad()
 def learned_rollout(
-    model: PerRowAlphaNet,
+    model: PerRowAlphaNet | ScalarAlphaNet,
     batch: dict,
     cfg: Config,
     T_total: int = 100,
@@ -83,10 +83,14 @@ def learned_rollout(
     rho_vec = batch['rho_vec'].clone()
     rho_inv = batch['rho_inv'].clone()
 
+    scalar_mode = getattr(cfg, 'alpha_mode', 'vector') == 'scalar'
+
     factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
     state_history = []
     step_in_stage = 0
-    alpha_z = torch.full((B, m), 1.6, dtype=dtype, device=device)   # will be updated
+    # will be updated at stage boundaries; init to baseline
+    alpha_z       = torch.full((B, m), 1.6, dtype=dtype, device=device)
+    alpha_x_cur   = cfg.alpha_x  # may become (B, 1) in scalar mode
 
     # Previous state (T steps ago); zeros at stage 0
     x_prev = torch.zeros(B, n, dtype=dtype, device=device)
@@ -96,14 +100,23 @@ def learned_rollout(
     for t in range(T_total):
         # Recompute alpha at the start of each stage
         if step_in_stage == 0:
-            features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
-                                                x_prev, z_prev, y_prev)
-            alpha_z = model(features)   # (B, m)
+            if scalar_mode:
+                global_feat   = compute_global_features(
+                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
+                )
+                alpha_scalar  = model(global_feat)          # (B,)
+                alpha_z       = alpha_scalar.unsqueeze(-1)  # (B, 1)
+                alpha_x_cur   = alpha_z
+            else:
+                features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
+                                                    x_prev, z_prev, y_prev)
+                alpha_z = model(features)   # (B, m)
+                alpha_x_cur = cfg.alpha_x
 
         x_prev_step, z_prev_step, y_prev_step = x.detach(), z.detach(), y.detach()
         x, z, y, _, _ = osqp_step(
             x, z, y, q, l, u, rho_vec, rho_inv,
-            factors, cfg.alpha_x, alpha_z, cfg.sigma,
+            factors, alpha_x_cur, alpha_z, cfg.sigma,
         )
         state_history.append((x.clone(), z.clone(), y.clone()))
 
@@ -204,12 +217,21 @@ def evaluate(
         cfg_ckpt.device    = cfg.device
         cfg_ckpt.dtype     = cfg.dtype
         cfg_ckpt.precision = cfg.precision
+        # Back-compat: old checkpoints may not have alpha_mode / scalar_feature_dim
+        if not hasattr(cfg_ckpt, 'alpha_mode'):
+            cfg_ckpt.alpha_mode = 'vector'
+        if not hasattr(cfg_ckpt, 'scalar_feature_dim'):
+            cfg_ckpt.scalar_feature_dim = 5
         cfg = cfg_ckpt
 
     device = cfg.torch_device
     dtype  = cfg.torch_dtype
 
-    model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
+    alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
+    if alpha_mode == 'scalar':
+        model = ScalarAlphaNet(cfg).to(dtype=dtype, device=device)
+    else:
+        model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
     model.load_state_dict(ckpt['model_state'])
     model.feat_norm_active = ckpt.get('feat_norm_active', False)
     model.eval()
@@ -406,10 +428,13 @@ if __name__ == '__main__':
                         help='convergence tolerance: low → eps=1e-3, high → eps=1e-5')
     parser.add_argument('--normalize_features', action='store_true',
                         help='(informational only — normalization state is restored from checkpoint)')
+    parser.add_argument('--alpha_mode', type=str, default='vector',
+                        choices=['vector', 'scalar'],
+                        help='(informational only — alpha_mode is restored from checkpoint)')
     args = parser.parse_args()
 
     cfg = Config(n_fixed=args.n, device=args.device, dtype=args.dtype,
-                 precision=args.precision)
+                 precision=args.precision, alpha_mode=args.alpha_mode)
     evaluate(
         cfg=cfg,
         checkpoint_path=args.checkpoint,

@@ -28,7 +28,7 @@ import torch
 
 from solvers.osqppurepy import OSQP as _OSQPInterface
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet
+from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet
 
 # ------------------------------------------------------------------ #
 # Default checkpoint
@@ -44,9 +44,10 @@ _LOG_UPPER = 1e6
 _EPS = 1e-8
 
 
-def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet:
-    """Load a PerRowAlphaNet from a .pt checkpoint."""
-    model = PerRowAlphaNet(cfg)
+def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet | ScalarAlphaNet:
+    """Load a PerRowAlphaNet or ScalarAlphaNet from a .pt checkpoint."""
+    alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
+    model = ScalarAlphaNet(cfg) if alpha_mode == 'scalar' else PerRowAlphaNet(cfg)
     state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     if isinstance(state, dict):
         for key in ('model_state', 'model_state_dict', 'model', 'state_dict'):
@@ -220,6 +221,100 @@ class NeuralAlphaCallback:
 
 
 # ------------------------------------------------------------------ #
+# NeuralScalarAlphaCallback — scalar alpha mode
+# ------------------------------------------------------------------ #
+
+class NeuralScalarAlphaCallback:
+    """
+    Scalar-alpha callback: computes 5 global residual features, runs
+    ScalarAlphaNet → single scalar alpha, then applies it to BOTH
+    alpha_x (via work.settings.alpha) and alpha_z (returned as constant
+    (m,) array).
+
+    Feature vector (5-dim, matches compute_global_features):
+        f[0] log10(pri_res_inf_norm)        (unscaled, from work.info)
+        f[1] log10(dua_res_inf_norm)        (unscaled, from work.info)
+        f[2] log10(rho_scalar)              (work.settings.rho)
+        f[3] log10(pri_res_inf_norm / prev)
+        f[4] log10(dua_res_inf_norm / prev)
+
+    Note: the ratio features use unscaled residuals; since numerator and
+    denominator come from the same space the scale factor cancels, matching
+    the training pipeline exactly.
+    """
+
+    def __init__(self, work, model: ScalarAlphaNet, cfg: Config, T: int = 10):
+        self.work  = work
+        self.model = model
+        self.cfg   = cfg
+        self.T     = T
+        self.iter_count = 0
+        self._pri_res_inf_prev: float = 0.0
+        self._dua_res_inf_prev: float = 0.0
+
+    def _compute_features(self) -> np.ndarray:
+        """Returns (5,) float64 feature vector."""
+        work = self.work
+
+        pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
+        dua_res_unscaled = getattr(work.info, 'dua_res_vec', None)
+
+        if pri_res_unscaled is not None:
+            pri_res_inf = float(np.max(np.abs(pri_res_unscaled)))
+        else:
+            pri_res_inf = float(np.max(np.abs(work.data.A.dot(work.x) - work.z)))
+
+        if dua_res_unscaled is not None:
+            dua_res_inf = float(np.max(np.abs(dua_res_unscaled)))
+        else:
+            dua = work.data.P.dot(work.x) + work.data.q + work.data.A.T.dot(work.y)
+            dua_res_inf = float(np.max(np.abs(dua)))
+
+        rho_val = float(work.settings.rho)
+
+        def _log10c(v: float) -> float:
+            return float(np.log10(np.clip(v, _LOG_LOWER, _LOG_UPPER)))
+
+        return np.array([
+            _log10c(pri_res_inf),
+            _log10c(dua_res_inf),
+            _log10c(rho_val),
+            _log10c(pri_res_inf / (self._pri_res_inf_prev + _EPS)),
+            _log10c(dua_res_inf / (self._dua_res_inf_prev + _EPS)),
+        ], dtype=np.float64)
+
+    def __call__(self) -> np.ndarray | None:
+        """Returns constant (m,) alpha array at stage boundaries, else None."""
+        self.iter_count += 1
+        if (self.iter_count - 1) % self.T != 0:
+            return None
+
+        work = self.work
+
+        # Save current residual norms as T-step-ago values for next stage
+        pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
+        dua_res_unscaled = getattr(work.info, 'dua_res_vec', None)
+        if pri_res_unscaled is not None:
+            self._pri_res_inf_prev = float(np.max(np.abs(pri_res_unscaled)))
+        if dua_res_unscaled is not None:
+            self._dua_res_inf_prev = float(np.max(np.abs(dua_res_unscaled)))
+
+        feat_np = self._compute_features()                                   # (5,)
+        feat_t  = torch.from_numpy(feat_np).to(dtype=self.cfg.torch_dtype).unsqueeze(0)  # (1, 5)
+
+        with torch.no_grad():
+            alpha_t = self.model(feat_t)  # (1,)
+
+        alpha_val = float(alpha_t.item())
+
+        # Apply scalar alpha to alpha_x via settings
+        work.settings.alpha = alpha_val
+
+        # Return constant (m,) array for alpha_z
+        return np.full(work.data.m, alpha_val, dtype=np.float64)
+
+
+# ------------------------------------------------------------------ #
 # NeuralOSQPSolver — benchmark-compatible wrapper
 # ------------------------------------------------------------------ #
 
@@ -240,12 +335,15 @@ class NeuralOSQPSolver:
         checkpoint_path: str = _DEFAULT_CHECKPOINT,
         cfg: Config | None = None,
         T: int = 10,
+        alpha_mode: str = 'vector',
     ):
         self._cfg = cfg or Config()
+        self._cfg.alpha_mode = alpha_mode
         self._nn = _load_model(checkpoint_path, self._cfg)
         self._T = T
+        self._alpha_mode = alpha_mode
         self._osqp = _OSQPInterface()   # underlying solver
-        self._callback: NeuralAlphaCallback | None = None
+        self._callback: NeuralAlphaCallback | NeuralScalarAlphaCallback | None = None
 
     # Forward version / constant to osqp interface
     def version(self):
@@ -264,7 +362,10 @@ class NeuralOSQPSolver:
 
         # Install callback on the internal _osqp.OSQP work object
         work = self._osqp._model.work
-        self._callback = NeuralAlphaCallback(work, self._nn, self._cfg, self._T)
+        if self._alpha_mode == 'scalar':
+            self._callback = NeuralScalarAlphaCallback(work, self._nn, self._cfg, self._T)
+        else:
+            self._callback = NeuralAlphaCallback(work, self._nn, self._cfg, self._T)
         work.learnt_component_callback = self._callback
 
     def solve(self, total_iters=None):

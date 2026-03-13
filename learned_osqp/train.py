@@ -44,10 +44,10 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet
+from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet
 import itertools
 from learned_osqp.data import make_dataloaders_multi, dataset_path
-from learned_osqp.features import compute_per_row_features
+from learned_osqp.features import compute_per_row_features, compute_global_features
 
 
 from learned_osqp.osqp_torch import (
@@ -77,8 +77,10 @@ def compute_feature_stats(
         mean : (feature_dim,) tensor
         std  : (feature_dim,) tensor — entries with std < 1e-6 are set to 1.0
     """
-    feat_sum = torch.zeros(cfg.feature_dim, dtype=dtype, device=device)
-    feat_sq  = torch.zeros(cfg.feature_dim, dtype=dtype, device=device)
+    scalar_mode = getattr(cfg, 'alpha_mode', 'vector') == 'scalar'
+    feat_dim  = cfg.scalar_feature_dim if scalar_mode else cfg.feature_dim
+    feat_sum = torch.zeros(feat_dim, dtype=dtype, device=device)
+    feat_sq  = torch.zeros(feat_dim, dtype=dtype, device=device)
     count    = 0
 
     iterable = itertools.chain(*train_loaders) if isinstance(train_loaders, list) else train_loaders
@@ -100,17 +102,25 @@ def compute_feature_stats(
             z = torch.zeros(B, m, dtype=dtype, device=device)
             y = torch.zeros(B, m, dtype=dtype, device=device)
             alpha_z = torch.full((B, m), 1.6, dtype=dtype, device=device)
+            rho_scalar_vec = torch.full((B,), cfg.rho, dtype=dtype, device=device)
 
             factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
 
             for _ in range(n_stages):
                 x_prev, z_prev, y_prev = x, z, y
 
-                feat = compute_per_row_features(
-                    P, q, A, l, u, x, z, y, rho_vec, x_star,
-                    x_prev, z_prev, y_prev,
-                )  # (B, m, feature_dim)
-                flat = feat.reshape(-1, cfg.feature_dim)
+                if scalar_mode:
+                    feat = compute_global_features(
+                        P, q, A, x, z, y, rho_scalar_vec,
+                        x_prev, z_prev, y_prev,
+                    )  # (B, scalar_feature_dim)
+                    flat = feat  # (B, scalar_feature_dim)
+                else:
+                    feat = compute_per_row_features(
+                        P, q, A, l, u, x, z, y, rho_vec, x_star,
+                        x_prev, z_prev, y_prev,
+                    )  # (B, m, feature_dim)
+                    flat = feat.reshape(-1, cfg.feature_dim)
                 feat_sum += flat.sum(0)
                 feat_sq  += (flat ** 2).sum(0)
                 count    += flat.shape[0]
@@ -224,7 +234,7 @@ def _osqp_converged_batched(
 # --------------------------------------------------------------------------- #
 
 def train_epoch(
-    model: PerRowAlphaNet,
+    model: nn.Module,
     loaders,
     optimizer: torch.optim.Optimizer,
     cfg: Config,
@@ -334,28 +344,43 @@ def train_epoch(
             else:
                 active = torch.ones(B, dtype=torch.bool, device=device)
 
-            features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
-                                                x_prev, z_prev, y_prev)
-            alpha_z = model(features)
-            with torch.no_grad():
-                _az = alpha_z.detach()
-                alpha_sum    += _az.sum().item()
-                alpha_sum_sq += (_az ** 2).sum().item()
-                alpha_count  += _az.numel()
-
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
                            'rho_vec': rho_vec, 'rho_inv': rho_inv,
                            'R': R, 'AR': AR, 'ARAt': ARAt}
 
+            if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
+                # ScalarAlphaNet: (B,) → unsqueeze to (B, 1) for broadcasting
+                global_feat  = compute_global_features(
+                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
+                )  # (B, scalar_feature_dim)
+                alpha_scalar = model(global_feat)          # (B,)
+                alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1) — broadcasts vs (B, m/n)
+                alpha_x_override = alpha_z                 # same (B, 1)
+            else:
+                features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
+                                                    x_prev, z_prev, y_prev)
+                alpha_z = model(features)   # (B, m)
+                alpha_x_override = None
+                alpha_scalar = None
+
+            with torch.no_grad():
+                _az = (alpha_scalar if alpha_scalar is not None else alpha_z).detach()
+                alpha_sum    += _az.sum().item()
+                alpha_sum_sq += (_az ** 2).sum().item()
+                alpha_count  += _az.numel()
+
             if loss_type == "spectral_radius":
                 loss_i = spectral_radius_loss(z, alpha_z, _batch_data, cfg)
                 with torch.no_grad():
+                    _az_d = alpha_z.detach()
                     x_new, z_new, y_new = rollout_T_steps(
-                        x, z, y, alpha_z.detach(), factors, _batch_data, cfg,
+                        x, z, y, _az_d, factors, _batch_data, cfg,
+                        alpha_x_override=_az_d if alpha_x_override is not None else None,
                     )
             else:
                 x_new, z_new, y_new = rollout_T_steps(
                     x, z, y, alpha_z, factors, _batch_data, cfg,
+                    alpha_x_override=alpha_x_override,
                 )
                 if loss_type == "scaled_residual":
                     loss_i = scaled_residual_loss(
@@ -427,7 +452,7 @@ def train_epoch(
 
 @torch.no_grad()
 def val_epoch(
-    model: PerRowAlphaNet,
+    model: nn.Module,
     loaders,
     cfg: Config,
     device: torch.device,
@@ -510,19 +535,32 @@ def val_epoch(
             else:
                 active = torch.ones(B, dtype=torch.bool, device=device)
 
-            features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
-                                                x_prev, z_prev, y_prev)
-            alpha_z = model(features)
-            alpha_sum    += alpha_z.sum().item()
-            alpha_sum_sq += (alpha_z ** 2).sum().item()
-            alpha_count  += alpha_z.numel()
-
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
                            'rho_vec': rho_vec, 'rho_inv': rho_inv,
                            'R': R, 'AR': AR, 'ARAt': ARAt}
 
+            if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
+                global_feat  = compute_global_features(
+                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
+                )  # (B, scalar_feature_dim)
+                alpha_scalar = model(global_feat)          # (B,)
+                alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1)
+                alpha_x_override = alpha_z
+            else:
+                features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
+                                                    x_prev, z_prev, y_prev)
+                alpha_z = model(features)   # (B, m)
+                alpha_x_override = None
+                alpha_scalar = None
+
+            _az = alpha_scalar if alpha_scalar is not None else alpha_z
+            alpha_sum    += _az.sum().item()
+            alpha_sum_sq += (_az ** 2).sum().item()
+            alpha_count  += _az.numel()
+
             x_new, z_new, y_new = rollout_T_steps(
                 x, z, y, alpha_z, factors, _batch_data, cfg,
+                alpha_x_override=alpha_x_override,
             )
 
             if loss_type == "spectral_radius":
@@ -610,7 +648,9 @@ def train(
 
     device = cfg.torch_device
 
-    log.info(f"Training PerRowAlphaNet  [loss_type={loss_type}]")
+    alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
+    model_name = 'ScalarAlphaNet' if alpha_mode == 'scalar' else 'PerRowAlphaNet'
+    log.info(f"Training {model_name}  [loss_type={loss_type}, alpha_mode={alpha_mode}]")
     log.info(f"  qp_types={cfg.qp_types}, qp_type_sizes={cfg.qp_type_sizes}, batch_size={cfg.batch_size}")
     log.info(f"  T={cfg.T} steps/stage, max_stages={cfg.max_stages}")
     log.info(f"  alpha range: [{cfg.alpha_min}, {cfg.alpha_max}]")
@@ -624,7 +664,10 @@ def train(
     n_va = sum(len(l) for l in val_loaders)
     log.info(f"  Total train batches: {n_tr}, Total val batches: {n_va}")
 
-    model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+    if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
+        model = ScalarAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+    else:
+        model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"  Model parameters: {n_params:,}")
 
@@ -736,6 +779,10 @@ if __name__ == '__main__':
     parser.add_argument('--adaptive_rho', type=lambda x: x.lower() != 'false',
                         default=True, metavar='BOOL',
                         help='enable adaptive rho updates (default: True); pass false to disable')
+    parser.add_argument('--alpha_mode', type=str, default='vector',
+                        choices=['vector', 'scalar'],
+                        help='vector: per-row alpha_z via PerRowAlphaNet (default); '
+                             'scalar: single alpha for both alpha_x and alpha_z via ScalarAlphaNet')
     parser.add_argument('--normalize_features', action='store_true',
                         help='normalize input features to zero mean / unit std before training')
     args = parser.parse_args()
@@ -767,6 +814,7 @@ if __name__ == '__main__':
         precision=args.precision,
         adaptive_rho=args.adaptive_rho,
         normalize_features=args.normalize_features,
+        alpha_mode=args.alpha_mode,
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
         data_dir='/data/engs-goulart/sedm7756',
@@ -781,7 +829,7 @@ if __name__ == '__main__':
                 print(f"Removed dataset: {p}")
 
     if args.ckpt is None:
-        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}"
+        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
         ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt

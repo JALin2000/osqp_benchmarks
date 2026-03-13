@@ -142,3 +142,62 @@ def compute_per_row_features(
     ], dim=-1)  # (B, m, 12)
 
     return features
+
+
+def compute_global_features(
+    P: torch.Tensor,          # (B, n, n)
+    q: torch.Tensor,          # (B, n)
+    A: torch.Tensor,          # (B, m, n)
+    x: torch.Tensor,          # (B, n)
+    z: torch.Tensor,          # (B, m)
+    y: torch.Tensor,          # (B, m)
+    rho_scalar: torch.Tensor, # (B,)   base rho (not per-row)
+    x_prev: torch.Tensor,     # (B, n)  state T steps ago  (zeros at stage 0)
+    z_prev: torch.Tensor,     # (B, m)
+    y_prev: torch.Tensor,     # (B, m)
+) -> torch.Tensor:            # (B, 5)
+    """
+    Compute 5-dim global feature vector for ScalarAlphaNet.
+
+    Features:
+        f[0] = log10(clamped pri_res_inf_norm)
+        f[1] = log10(clamped dua_res_inf_norm)
+        f[2] = log10(clamped rho_scalar)
+        f[3] = log10(clamped pri_res_inf_norm / pri_res_inf_norm_prev)
+        f[4] = log10(clamped dua_res_inf_norm / dua_res_inf_norm_prev)
+
+    All residuals are computed in the (scaled) problem space that the training
+    loop operates in.  Ratio features are robust to absolute magnitude and
+    encode convergence speed.
+
+    At stage 0 (x_prev=z_prev=y_prev=0) the prev norms are 0, so the ratio
+    features are clamped to log10(1e6) = 6.  This is a valid warm-start signal.
+    """
+    def _log10c(v: torch.Tensor) -> torch.Tensor:
+        return torch.log10(torch.clamp(v, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP))
+
+    if torch.any(rho_scalar != 0.1):
+        a=  1
+    # Current residuals
+    Ax  = torch.bmm(A, x.unsqueeze(-1)).squeeze(-1)           # (B, m)
+    pri_res_inf = torch.norm(z - Ax, p=float('inf'), dim=1)   # (B,)
+
+    Px  = torch.bmm(P, x.unsqueeze(-1)).squeeze(-1)           # (B, n)
+    ATy = torch.bmm(A.transpose(1, 2), y.unsqueeze(-1)).squeeze(-1)  # (B, n)
+    dua_res_inf = torch.norm(Px + q + ATy, p=float('inf'), dim=1)    # (B,)
+
+    # Previous residuals (T steps ago)
+    Ax_prev  = torch.bmm(A, x_prev.unsqueeze(-1)).squeeze(-1)          # (B, m)
+    pri_res_inf_prev = torch.norm(z_prev - Ax_prev, p=float('inf'), dim=1)  # (B,)
+
+    Px_prev  = torch.bmm(P, x_prev.unsqueeze(-1)).squeeze(-1)          # (B, n)
+    ATy_prev = torch.bmm(A.transpose(1, 2), y_prev.unsqueeze(-1)).squeeze(-1)  # (B, n)
+    dua_res_inf_prev = torch.norm(Px_prev + q + ATy_prev, p=float('inf'), dim=1)  # (B,)
+
+    return torch.stack([
+        _log10c(pri_res_inf),                                          # f[0]
+        _log10c(dua_res_inf),                                          # f[1]
+        _log10c(rho_scalar),                                           # f[2]
+        _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),              # f[3]
+        _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),              # f[4]
+    ], dim=-1)  # (B, 5)

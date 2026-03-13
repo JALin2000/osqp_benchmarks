@@ -87,6 +87,15 @@ class Config:
     qp_type_sizes: dict = field(default_factory=lambda: {'random_qp': 20})
 
     # ------------------------------------------------------------------ #
+    # Alpha mode
+    # ------------------------------------------------------------------ #
+    # 'vector' : per-row alpha_z (B, m) predicted by PerRowAlphaNet
+    # 'scalar' : single scalar alpha replacing both alpha_x and alpha_z,
+    #            predicted by ScalarAlphaNet from 5 global residual features
+    alpha_mode: str = 'vector'
+    scalar_feature_dim: int = 5   # dim of global features used by ScalarAlphaNet
+
+    # ------------------------------------------------------------------ #
     # Feature normalization
     # ------------------------------------------------------------------ #
     normalize_features: bool = False  # if True, normalize input features to zero mean / unit std
