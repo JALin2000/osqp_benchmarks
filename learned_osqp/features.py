@@ -155,9 +155,10 @@ def compute_global_features(
     x_prev: torch.Tensor,     # (B, n)  state T steps ago  (zeros at stage 0)
     z_prev: torch.Tensor,     # (B, m)
     y_prev: torch.Tensor,     # (B, m)
-) -> torch.Tensor:            # (B, 5)
+    alpha: torch.Tensor,      # (B,)   alpha used at previous stage (1.6 at stage 0)
+) -> torch.Tensor:            # (B, 7)
     """
-    Compute 5-dim global feature vector for ScalarAlphaNet.
+    Compute 7-dim global feature vector for ScalarAlphaNet.
 
     Features:
         f[0] = log10(clamped pri_res_inf_norm)
@@ -165,6 +166,8 @@ def compute_global_features(
         f[2] = log10(clamped rho_scalar)
         f[3] = log10(clamped pri_res_inf_norm / pri_res_inf_norm_prev)
         f[4] = log10(clamped dua_res_inf_norm / dua_res_inf_norm_prev)
+        f[5] = log10(clamped pri_res_inf_norm / dua_res_inf_norm)   (primal/dual imbalance)
+        f[6] = alpha from previous stage                             (action feedback)
 
     All residuals are computed in the (scaled) problem space that the training
     loop operates in.  Ratio features are robust to absolute magnitude and
@@ -200,4 +203,6 @@ def compute_global_features(
         _log10c(rho_scalar),                                           # f[2]
         _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),              # f[3]
         _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),              # f[4]
-    ], dim=-1)  # (B, 5)
+        _log10c(pri_res_inf / (dua_res_inf + _EPS)),                   # f[5] primal/dual imbalance
+        alpha,                                                          # f[6] previous-stage alpha
+    ], dim=-1)  # (B, 7)

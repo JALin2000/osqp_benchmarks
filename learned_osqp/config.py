@@ -91,9 +91,9 @@ class Config:
     # ------------------------------------------------------------------ #
     # 'vector' : per-row alpha_z (B, m) predicted by PerRowAlphaNet
     # 'scalar' : single scalar alpha replacing both alpha_x and alpha_z,
-    #            predicted by ScalarAlphaNet from 5 global residual features
+    #            predicted by ScalarAlphaNet from 7 global residual features
     alpha_mode: str = 'vector'
-    scalar_feature_dim: int = 5   # dim of global features used by ScalarAlphaNet
+    scalar_feature_dim: int = 7   # dim of global features used by ScalarAlphaNet
 
     # ------------------------------------------------------------------ #
     # Feature normalization

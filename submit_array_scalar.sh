@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=48G                       # 32 GB memory per array task
-#SBATCH --array=1-20                    
+#SBATCH --array=1-18                    
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -40,8 +40,8 @@ CMDS=(
   "python learned_osqp/train.py --precision high --types random_qp --sizes 150 --normalize_features --alpha_mode scalar"
   "python learned_osqp/train.py --precision high --types random_qp --sizes 150 --adaptive_rho false --normalize_features --alpha_mode scalar"
 
-  "python learned_osqp/train.py --precision high --types svm --sizes 15 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --precision high --types svm --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
+  # "python learned_osqp/train.py --precision high --types svm --sizes 15 --normalize_features --alpha_mode scalar"
+  # "python learned_osqp/train.py --precision high --types svm --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
 
   "python learned_osqp/train.py --precision high --types control --sizes 80 --normalize_features --alpha_mode scalar"
   "python learned_osqp/train.py --precision high --types control --sizes 80 --adaptive_rho false --normalize_features --alpha_mode scalar"

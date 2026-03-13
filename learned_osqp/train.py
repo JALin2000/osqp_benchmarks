@@ -105,6 +105,7 @@ def compute_feature_stats(
             rho_scalar_vec = torch.full((B,), cfg.rho, dtype=dtype, device=device)
 
             factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+            alpha_stats = torch.full((B,), 1.6, dtype=dtype, device=device)
 
             for _ in range(n_stages):
                 x_prev, z_prev, y_prev = x, z, y
@@ -112,7 +113,7 @@ def compute_feature_stats(
                 if scalar_mode:
                     feat = compute_global_features(
                         P, q, A, x, z, y, rho_scalar_vec,
-                        x_prev, z_prev, y_prev,
+                        x_prev, z_prev, y_prev, alpha_stats,
                     )  # (B, scalar_feature_dim)
                     flat = feat  # (B, scalar_feature_dim)
                 else:
@@ -332,6 +333,7 @@ def train_epoch(
         x_prev = torch.zeros(B, n, dtype=dtype, device=device)
         z_prev = torch.zeros(B, m, dtype=dtype, device=device)
         y_prev = torch.zeros(B, m, dtype=dtype, device=device)
+        alpha_prev = torch.full((B,), cfg.alpha_x, dtype=dtype, device=device)
 
         for stage in range(cfg.max_stages):
             # Skip convergence check at stage 0: x=z=y=0 can give spurious
@@ -351,9 +353,10 @@ def train_epoch(
             if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
                 # ScalarAlphaNet: (B,) → unsqueeze to (B, 1) for broadcasting
                 global_feat  = compute_global_features(
-                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
+                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
                 )  # (B, scalar_feature_dim)
                 alpha_scalar = model(global_feat)          # (B,)
+                alpha_prev   = alpha_scalar.detach()
                 alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1) — broadcasts vs (B, m/n)
                 alpha_x_override = alpha_z                 # same (B, 1)
             else:
@@ -524,6 +527,7 @@ def val_epoch(
         x_prev = torch.zeros(B, n, dtype=dtype, device=device)
         z_prev = torch.zeros(B, m, dtype=dtype, device=device)
         y_prev = torch.zeros(B, m, dtype=dtype, device=device)
+        alpha_prev = torch.full((B,), cfg.alpha_x, dtype=dtype, device=device)
 
         for stage in range(cfg.max_stages):
             # Skip convergence check at stage 0: x=z=y=0 can give spurious
@@ -541,9 +545,10 @@ def val_epoch(
 
             if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
                 global_feat  = compute_global_features(
-                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
+                    P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
                 )  # (B, scalar_feature_dim)
                 alpha_scalar = model(global_feat)          # (B,)
+                alpha_prev   = alpha_scalar.detach()
                 alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1)
                 alpha_x_override = alpha_z
             else:
@@ -830,7 +835,7 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
-        ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}.pt"
+        ckpt_path = f"learned_osqp/checkpoints/cuda_float32/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)
