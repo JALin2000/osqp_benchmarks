@@ -829,7 +829,7 @@ if __name__ == '__main__':
         store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='learned_osqp/data',
+        data_dir='/data/engs-goulart/sedm7756',
     )
 
     if args.regen:
