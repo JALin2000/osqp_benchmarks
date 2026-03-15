@@ -366,11 +366,6 @@ def _build_instance_from_qp(qp, cfg: Config) -> dict | None:
     y_star_sc = c_scale * e_inv_np * y_star_np
     z_star_sc = e_vec * z_star_np
 
-    K_sc    = P_sc + cfg.sigma * np.eye(n)
-    R_sc    = np.linalg.inv(K_sc)
-    AR_sc   = A_sc @ R_sc
-    ARAt_sc = AR_sc @ A_sc.T
-
     instance = {
         'P': torch.tensor(P_sc, dtype=torch.float64),
         'q': torch.tensor(q_sc, dtype=torch.float64),
@@ -385,9 +380,6 @@ def _build_instance_from_qp(qp, cfg: Config) -> dict | None:
         'constr_type': torch.tensor(constr_type, dtype=torch.int32),
         'n': n,
         'm': m,
-        'R':    torch.tensor(R_sc,    dtype=torch.float64),
-        'AR':   torch.tensor(AR_sc,   dtype=torch.float64),
-        'ARAt': torch.tensor(ARAt_sc, dtype=torch.float64),
         'd_scale': torch.tensor(d_vec,     dtype=torch.float64),
         'e_scale': torch.tensor(e_vec,     dtype=torch.float64),
         'c_scale': torch.tensor(c_scale,   dtype=torch.float64),
@@ -395,6 +387,17 @@ def _build_instance_from_qp(qp, cfg: Config) -> dict | None:
         'e_inv':   torch.tensor(e_inv_np,  dtype=torch.float64),
         'c_inv':   torch.tensor(c_inv_val, dtype=torch.float64),
     }
+
+    # R, AR, ARAt are only needed for spectral_radius_loss.
+    # Skip them to save memory (e.g. SVM: 127MB/instance × 60 = 7.6GB).
+    if getattr(cfg, 'store_spectral_matrices', True):
+        K_sc    = P_sc + cfg.sigma * np.eye(n)
+        R_sc    = np.linalg.inv(K_sc)
+        AR_sc   = A_sc @ R_sc
+        ARAt_sc = AR_sc @ A_sc.T
+        instance['R']    = torch.tensor(R_sc,    dtype=torch.float64)
+        instance['AR']   = torch.tensor(AR_sc,   dtype=torch.float64)
+        instance['ARAt'] = torch.tensor(ARAt_sc, dtype=torch.float64)
 
     bl_iters, bl_rho = compute_baseline_stats(instance, cfg)
     instance['baseline_iters'] = torch.tensor(bl_iters, dtype=torch.int64)

@@ -189,6 +189,7 @@ def _osqp_converged_batched(
     e_inv: torch.Tensor,  # (B, m)     E^{-1} diagonal
     c_inv: torch.Tensor,  # (B,)       1 / c_scale
     cfg: 'Config',
+    AT: torch.Tensor | None = None,  # (B, n, m) precomputed A^T contiguous
 ) -> torch.Tensor:
     """
     OSQP SOLVED criterion with unscaling (batched, no_grad).
@@ -205,8 +206,10 @@ def _osqp_converged_batched(
         eps_pri = eps_abs + eps_rel * max(||A*x_orig||_inf, ||z_orig||_inf)
         eps_dua = eps_abs + eps_rel * max(||A^T*y_orig||_inf, ||P*x_orig||_inf, ||q||_inf)
     """
+    if AT is None:
+        AT = A.transpose(1, 2)
     Ax  = torch.bmm(A, x.unsqueeze(-1)).squeeze(-1)                     # (B, m)
-    ATy = torch.bmm(A.transpose(1, 2), y.unsqueeze(-1)).squeeze(-1)     # (B, n)
+    ATy = torch.bmm(AT, y.unsqueeze(-1)).squeeze(-1)                    # (B, n)
     Px  = torch.bmm(P, x.unsqueeze(-1)).squeeze(-1)                     # (B, n)
 
     c_inv_u = c_inv.unsqueeze(1)                                         # (B, 1)
@@ -299,9 +302,6 @@ def train_epoch(
         y_star = batch['y_star']
         z_star = batch['z_star']
         constr_type = batch['constr_type']
-        R    = batch['R']
-        AR   = batch['AR']
-        ARAt = batch['ARAt']
         d_inv = batch['d_inv']   # (B, n)
         e_inv = batch['e_inv']   # (B, m)
         c_inv = batch['c_inv']   # (B,)
@@ -309,6 +309,7 @@ def train_epoch(
         B = P.shape[0]
         n = P.shape[1]
         m = A.shape[1]
+        AT = A.transpose(1, 2).contiguous()  # (B, n, m) — precompute once per batch
 
         x = torch.zeros(B, n, dtype=dtype, device=device)
         z = torch.zeros(B, m, dtype=dtype, device=device)
@@ -340,20 +341,24 @@ def train_epoch(
             # convergence (e.g. when q=0 as in control QPs).
             if stage > 0:
                 with torch.no_grad():
-                    active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
+                    active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg, AT=AT)
                     if not active.any():
                         break
             else:
                 active = torch.ones(B, dtype=torch.bool, device=device)
 
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
-                           'rho_vec': rho_vec, 'rho_inv': rho_inv,
-                           'R': R, 'AR': AR, 'ARAt': ARAt}
+                           'rho_vec': rho_vec, 'rho_inv': rho_inv}
+            if loss_type == "spectral_radius":
+                _batch_data['R']    = batch['R']
+                _batch_data['AR']   = batch['AR']
+                _batch_data['ARAt'] = batch['ARAt']
 
             if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
                 # ScalarAlphaNet: (B,) → unsqueeze to (B, 1) for broadcasting
                 global_feat  = compute_global_features(
                     P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
+                    AT=AT,
                 )  # (B, scalar_feature_dim)
                 alpha_scalar = model(global_feat)          # (B,)
                 alpha_prev   = alpha_scalar.detach()
@@ -361,7 +366,7 @@ def train_epoch(
                 alpha_x_override = alpha_z                 # same (B, 1)
             else:
                 features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
-                                                    x_prev, z_prev, y_prev)
+                                                    x_prev, z_prev, y_prev, AT=AT)
                 alpha_z = model(features)   # (B, m)
                 alpha_x_override = None
                 alpha_scalar = None
@@ -410,7 +415,7 @@ def train_epoch(
 
             with torch.no_grad():
                 newly = _osqp_converged_batched(
-                    P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg) & ~osqp_done
+                    P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg, AT=AT) & ~osqp_done
                 osqp_iters[newly] = float((stage + 1) * cfg.T)
                 osqp_done |= newly
 
@@ -498,15 +503,13 @@ def val_epoch(
         y_star = batch['y_star']
         z_star = batch['z_star']
         constr_type = batch['constr_type']
-        R    = batch['R']
-        AR   = batch['AR']
-        ARAt = batch['ARAt']
         d_inv = batch['d_inv']   # (B, n)
         e_inv = batch['e_inv']   # (B, m)
         c_inv = batch['c_inv']   # (B,)
 
         B, n = P.shape[0], P.shape[1]
         m = A.shape[1]
+        AT = A.transpose(1, 2).contiguous()  # (B, n, m) — precompute once per batch
 
         x = torch.zeros(B, n, dtype=dtype, device=device)
         z = torch.zeros(B, m, dtype=dtype, device=device)
@@ -533,19 +536,23 @@ def val_epoch(
             # Skip convergence check at stage 0: x=z=y=0 can give spurious
             # convergence (e.g. when q=0 as in control QPs).
             if stage > 0:
-                active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg)
+                active = convergence_mask(P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg, AT=AT)
                 if not active.any():
                     break
             else:
                 active = torch.ones(B, dtype=torch.bool, device=device)
 
             _batch_data = {'P': P, 'A': A, 'q': q, 'l': l, 'u': u,
-                           'rho_vec': rho_vec, 'rho_inv': rho_inv,
-                           'R': R, 'AR': AR, 'ARAt': ARAt}
+                           'rho_vec': rho_vec, 'rho_inv': rho_inv}
+            if loss_type == "spectral_radius":
+                _batch_data['R']    = batch['R']
+                _batch_data['AR']   = batch['AR']
+                _batch_data['ARAt'] = batch['ARAt']
 
             if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
                 global_feat  = compute_global_features(
                     P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
+                    AT=AT,
                 )  # (B, scalar_feature_dim)
                 alpha_scalar = model(global_feat)          # (B,)
                 alpha_prev   = alpha_scalar.detach()
@@ -553,7 +560,7 @@ def val_epoch(
                 alpha_x_override = alpha_z
             else:
                 features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
-                                                    x_prev, z_prev, y_prev)
+                                                    x_prev, z_prev, y_prev, AT=AT)
                 alpha_z = model(features)   # (B, m)
                 alpha_x_override = None
                 alpha_scalar = None
@@ -587,7 +594,7 @@ def val_epoch(
             x, z, y = x_new, z_new, y_new
 
             newly = _osqp_converged_batched(
-                P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg) & ~osqp_done
+                P, A, q, x, z, y, d_inv, e_inv, c_inv, cfg, AT=AT) & ~osqp_done
             osqp_iters[newly] = float((stage + 1) * cfg.T)
             osqp_done |= newly
 
@@ -820,6 +827,7 @@ if __name__ == '__main__':
         adaptive_rho=args.adaptive_rho,
         normalize_features=args.normalize_features,
         alpha_mode=args.alpha_mode,
+        store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
         data_dir='/data/engs-goulart/sedm7756',

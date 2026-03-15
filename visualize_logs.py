@@ -142,7 +142,7 @@ def main():
     if len(sys.argv) > 1:
         search_dir = Path(sys.argv[1])
     else:
-        search_dir = Path(__file__).parent / 'learned_osqp' / 'checkpoints_arc/checkpoints'
+        search_dir = Path(__file__).parent / 'learned_osqp' / 'checkpoints_arc/scalar_new_feat_float32'
 
     log_files = sorted(search_dir.glob('*.log'))
     if not log_files:

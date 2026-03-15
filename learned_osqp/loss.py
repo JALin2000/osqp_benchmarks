@@ -137,6 +137,7 @@ def convergence_mask(
     e_inv: torch.Tensor,   # (B, m)     E^{-1} diagonal
     c_inv: torch.Tensor,   # (B,)       1 / c_scale
     cfg: 'Config',
+    AT: torch.Tensor | None = None,  # (B, n, m) precomputed A^T contiguous
 ) -> torch.Tensor:         # (B,) bool — True = NOT yet converged (include in loss)
     """
     Return a (B,) bool mask: True = instance has NOT yet converged.
@@ -157,8 +158,10 @@ def convergence_mask(
         active : (B,) bool  — True means "not yet converged, include in loss"
     """
     with torch.no_grad():
+        if AT is None:
+            AT = A.transpose(1, 2)
         Ax  = torch.bmm(A, x.unsqueeze(-1)).squeeze(-1)                    # (B, m)
-        ATy = torch.bmm(A.transpose(1, 2), y.unsqueeze(-1)).squeeze(-1)   # (B, n)
+        ATy = torch.bmm(AT, y.unsqueeze(-1)).squeeze(-1)                   # (B, n)
         Px  = torch.bmm(P, x.unsqueeze(-1)).squeeze(-1)                    # (B, n)
 
         c_inv_u = c_inv.unsqueeze(1)                                        # (B, 1)

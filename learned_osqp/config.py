@@ -96,6 +96,11 @@ class Config:
     scalar_feature_dim: int = 7   # dim of global features used by ScalarAlphaNet
 
     # ------------------------------------------------------------------ #
+    # Dataset storage
+    # ------------------------------------------------------------------ #
+    store_spectral_matrices: bool = True  # store R, AR, ARAt (only needed for spectral_radius loss)
+
+    # ------------------------------------------------------------------ #
     # Feature normalization
     # ------------------------------------------------------------------ #
     normalize_features: bool = False  # if True, normalize input features to zero mean / unit std

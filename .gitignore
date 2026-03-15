@@ -117,3 +117,5 @@ ENV/
 
 .vscode/
 learned_osqp/data
+checkpoints_arc/
+checkpoints/
