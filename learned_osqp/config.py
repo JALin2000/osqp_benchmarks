@@ -51,7 +51,7 @@ class Config:
     # ------------------------------------------------------------------ #
     # Network architecture
     # ------------------------------------------------------------------ #
-    feature_dim: int = 12         # Per-row feature vector length (see features.py)
+    feature_dim: int = 13         # Per-row feature vector length (see features.py)
     hidden_dim: int = 64
     n_layers: int = 3            # total layers = n_layers-1 hidden + 1 output
 
@@ -93,7 +93,7 @@ class Config:
     # 'scalar' : single scalar alpha replacing both alpha_x and alpha_z,
     #            predicted by ScalarAlphaNet from 7 global residual features
     alpha_mode: str = 'vector'
-    scalar_feature_dim: int = 7   # dim of global features used by ScalarAlphaNet
+    scalar_feature_dim: int = 6   # dim of global features used by ScalarAlphaNet
 
     # ------------------------------------------------------------------ #
     # Dataset storage

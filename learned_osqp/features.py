@@ -133,7 +133,8 @@ def compute_per_row_features(
         torch.log10(torch.clamp(abs_pri_res_vec / (abs_pri_res_vec_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] ratio of current to previous primal residual (elementwise)
         torch.log10(torch.clamp(pri_res_inf_norm / (pri_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] ratio of current to previous primal residual (inf norm)
         torch.log10(torch.clamp(dua_res_inf_norm / (dua_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] ratio of current to previous dual residual (inf norm)
-    ], dim=-1)  # (B, m, 12)
+        torch.log10(torch.clamp(pri_res_inf_norm / (dua_res_inf_norm + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log scaled primal/dual imbalance
+    ], dim=-1)  # (B, m, 13)
 
     return features
 
@@ -149,11 +150,11 @@ def compute_global_features(
     x_prev: torch.Tensor,     # (B, n)  state T steps ago  (zeros at stage 0)
     z_prev: torch.Tensor,     # (B, m)
     y_prev: torch.Tensor,     # (B, m)
-    alpha: torch.Tensor,      # (B,)   alpha used at previous stage (1.6 at stage 0)
+    alpha: torch.Tensor | None = None,  # (B,)   alpha used at previous stage (unused, kept for caller compat)
     AT: torch.Tensor | None = None,  # (B, n, m) precomputed A^T contiguous
-) -> torch.Tensor:            # (B, 7)
+) -> torch.Tensor:            # (B, 6)
     """
-    Compute 7-dim global feature vector for ScalarAlphaNet.
+    Compute 6-dim global feature vector for ScalarAlphaNet.
 
     Features:
         f[0] = log10(clamped pri_res_inf_norm)
@@ -162,7 +163,6 @@ def compute_global_features(
         f[3] = log10(clamped pri_res_inf_norm / pri_res_inf_norm_prev)
         f[4] = log10(clamped dua_res_inf_norm / dua_res_inf_norm_prev)
         f[5] = log10(clamped pri_res_inf_norm / dua_res_inf_norm)   (primal/dual imbalance)
-        f[6] = alpha from previous stage                             (action feedback)
 
     All residuals are computed in the (scaled) problem space that the training
     loop operates in.  Ratio features are robust to absolute magnitude and
@@ -200,5 +200,5 @@ def compute_global_features(
         _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),              # f[3]
         _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),              # f[4]
         _log10c(pri_res_inf / (dua_res_inf + _EPS)),                   # f[5] primal/dual imbalance
-        alpha,                                                          # f[6] previous-stage alpha
-    ], dim=-1)  # (B, 7)
+        # alpha,                                                        # (commented out) previous-stage alpha
+    ], dim=-1)  # (B, 6)

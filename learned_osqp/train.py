@@ -709,6 +709,9 @@ def train(
 
     best_val_loss = float('inf')
     best_val_iters_m = float('inf')
+    best_val_rho_m = float('inf')
+    best_val_rho_iters_m = float('inf')
+    ckpt_rho_path = ckpt_path.with_name(ckpt_path.stem + '_best_rho' + ckpt_path.suffix)
     t0 = time.time()
 
     for epoch in range(1, cfg.n_epochs + 1):
@@ -747,6 +750,22 @@ def train(
                 str(ckpt_path),
             )
             log.info(f"  -> saved checkpoint (val_iters_m={best_val_iters_m:.4f})")
+
+        # Second checkpoint: best val_rho_m (fewest rho updates),
+        # with val_iters_m as tiebreaker when val_rho_m is equal.
+        if (val_rho_m < best_val_rho_m
+                or (val_rho_m == best_val_rho_m and val_iters_m < best_val_rho_iters_m)):
+            best_val_rho_m = val_rho_m
+            best_val_rho_iters_m = val_iters_m
+            torch.save(
+                {'epoch': epoch, 'model_state': model.state_dict(),
+                 'val_loss': val_loss, 'cfg': cfg,
+                 'val_iters_m': val_iters_m, 'val_iters_s': val_iters_s,
+                 'val_rho_m': val_rho_m, 'val_rho_s': val_rho_s,
+                 'feat_norm_active': model.feat_norm_active},
+                str(ckpt_rho_path),
+            )
+            log.info(f"  -> saved rho checkpoint (val_rho_m={best_val_rho_m:.4f}, val_iters_m={best_val_rho_iters_m:.4f})")
 
     log.info(f"Training complete. Best val_loss={best_val_loss:.4f}")
     return model
@@ -829,7 +848,7 @@ if __name__ == '__main__':
         store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='/data/engs-goulart/sedm7756',
+        data_dir='/data/engs-goulart/sedm7756/float64_optimized',
     )
 
     if args.regen:
@@ -842,7 +861,7 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
-        ckpt_path = f"learned_osqp/checkpoints/float32/{ckpt_name}.pt"
+        ckpt_path = f"learned_osqp/checkpoints/float64_optimized/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)
