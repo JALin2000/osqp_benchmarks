@@ -85,7 +85,7 @@ def learned_rollout(
 
     scalar_mode = getattr(cfg, 'alpha_mode', 'vector') == 'scalar'
 
-    factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+    factors = factorize_kkt(P, A, cfg.sigma, rho_vec)
     state_history = []
     step_in_stage = 0
     # will be updated at stage boundaries; init to baseline
@@ -116,7 +116,7 @@ def learned_rollout(
         x_prev_step, z_prev_step, y_prev_step = x.detach(), z.detach(), y.detach()
         x, z, y, _, _ = osqp_step(
             x, z, y, q, l, u, rho_vec, rho_inv,
-            factors, alpha_x_cur, alpha_z, cfg.sigma,
+            factors, alpha_x_cur, alpha_z, cfg.sigma, A,
         )
         state_history.append((x.clone(), z.clone(), y.clone()))
 
@@ -137,7 +137,7 @@ def learned_rollout(
                 _batch_rho, x, z, y, rho_scalar, cfg
             )
             if changed.any():
-                factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+                factors = factorize_kkt(P, A, cfg.sigma, rho_vec)
 
     return state_history
 

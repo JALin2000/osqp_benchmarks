@@ -125,7 +125,7 @@ def compute_baseline_stats(instance: dict, cfg: Config, alpha: float = 1.6) -> t
     e_inv = instance['e_inv'].unsqueeze(0)   # (1, m)
     c_inv = float(instance['c_inv'].item())  # scalar
 
-    factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+    factors = factorize_kkt(P, A, cfg.sigma, rho_vec)
 
     def _converged(x_, z_, y_):
         Ax_  = torch.bmm(A, x_.unsqueeze(-1)).squeeze(-1)
@@ -154,7 +154,7 @@ def compute_baseline_stats(instance: dict, cfg: Config, alpha: float = 1.6) -> t
             for _ in range(cfg.T):
                 x, z, y, _, _ = osqp_step(
                     x, z, y, q, l, u, rho_vec, rho_inv,
-                    factors, cfg.alpha_x, alpha_z, cfg.sigma,
+                    factors, cfg.alpha_x, alpha_z, cfg.sigma, A,
                 )
 
             # Check convergence at stage boundary (same as training)
@@ -171,7 +171,7 @@ def compute_baseline_stats(instance: dict, cfg: Config, alpha: float = 1.6) -> t
                     _b, x, z, y, rho_scalar, cfg)
                 if updated.any():
                     rho_updates += 1
-                    factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+                    factors = factorize_kkt(P, A, cfg.sigma, rho_vec)
                     alpha_z = torch.full((1, m_dim), alpha, dtype=dtype)
 
     return iters_to_converge, rho_updates

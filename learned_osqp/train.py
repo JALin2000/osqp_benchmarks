@@ -94,7 +94,6 @@ def compute_feature_stats(
             P, A, q = batch['P'], batch['A'], batch['q']
             l, u    = batch['l'], batch['u']
             rho_vec = batch['rho_vec']
-            rho_inv = batch['rho_inv']
             x_star  = batch.get('x_star', None)
             B, m, n = A.shape
 
@@ -104,7 +103,7 @@ def compute_feature_stats(
             alpha_z = torch.full((B, m), 1.6, dtype=dtype, device=device)
             rho_scalar_vec = torch.full((B,), cfg.rho, dtype=dtype, device=device)
 
-            factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+            factors = factorize_kkt(P, A, cfg.sigma, rho_vec)
             alpha_stats = torch.full((B,), 1.6, dtype=dtype, device=device)
 
             for _ in range(n_stages):
@@ -318,7 +317,7 @@ def train_epoch(
         rho_scalar = torch.full((B,), cfg.rho, dtype=dtype, device=device)
         rho_vec = batch['rho_vec'].clone()
         rho_inv = batch['rho_inv'].clone()
-        factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+        factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
 
         optimizer.zero_grad()
 
@@ -428,7 +427,7 @@ def train_epoch(
                 )
                 rho_updates += (rho_updated.cpu() & ~osqp_done).float()
                 if rho_updated.any():
-                    factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+                    factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
 
         if n_active_stages > 0:
             avg_loss = stage_loss / n_active_stages
@@ -518,7 +517,7 @@ def val_epoch(
         rho_scalar = torch.full((B,), cfg.rho, dtype=dtype, device=device)
         rho_vec = batch['rho_vec'].clone()
         rho_inv = batch['rho_inv'].clone()
-        factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+        factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
 
         stage_loss = 0.0
         n_active = 0
@@ -607,7 +606,7 @@ def val_epoch(
                 )
                 rho_updates += (rho_updated.cpu() & ~osqp_done).float()
                 if rho_updated.any():
-                    factors = factorize_kkt(P, A, cfg.sigma, rho_inv)
+                    factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
 
         if n_active > 0:
             total_loss += stage_loss / n_active
@@ -830,7 +829,7 @@ if __name__ == '__main__':
         store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='/data/engs-goulart/sedm7756',
+        data_dir='learned_osqp/data',
     )
 
     if args.regen:
