@@ -848,7 +848,7 @@ if __name__ == '__main__':
         store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='/data/engs-goulart/sedm7756/float64_optimized',
+        data_dir='/data/engs-goulart/sedm7756/float32_optimized',
     )
 
     if args.regen:
@@ -861,7 +861,7 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
-        ckpt_path = f"learned_osqp/checkpoints/float64_optimized/{ckpt_name}.pt"
+        ckpt_path = f"learned_osqp/checkpoints/float32_optimized/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)
