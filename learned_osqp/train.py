@@ -44,7 +44,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet
+from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
 import itertools
 from learned_osqp.data import make_dataloaders_multi, dataset_path
 from learned_osqp.features import compute_per_row_features, compute_global_features
@@ -314,6 +314,9 @@ def train_epoch(
         z = torch.zeros(B, m, dtype=dtype, device=device)
         y = torch.zeros(B, m, dtype=dtype, device=device)
 
+        # GRU hidden state — reset to None (zeros) at the start of each problem
+        h_state: torch.Tensor | None = None
+
         rho_scalar = torch.full((B,), cfg.rho, dtype=dtype, device=device)
         rho_vec = batch['rho_vec'].clone()
         rho_inv = batch['rho_inv'].clone()
@@ -354,12 +357,15 @@ def train_epoch(
                 _batch_data['ARAt'] = batch['ARAt']
 
             if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
-                # ScalarAlphaNet: (B,) → unsqueeze to (B, 1) for broadcasting
+                # ScalarAlphaNet / ScalarGRUNet: (B,) → unsqueeze to (B, 1) for broadcasting
                 global_feat  = compute_global_features(
                     P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
                     AT=AT,
                 )  # (B, scalar_feature_dim)
-                alpha_scalar = model(global_feat)          # (B,)
+                if isinstance(model, ScalarGRUNet):
+                    alpha_scalar, h_state = model(global_feat, h_state)  # (B,), (B, hidden)
+                else:
+                    alpha_scalar = model(global_feat)          # (B,)
                 alpha_prev   = alpha_scalar.detach()
                 alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1) — broadcasts vs (B, m/n)
                 alpha_x_override = alpha_z                 # same (B, 1)
@@ -411,6 +417,9 @@ def train_epoch(
             x = x_new.detach()
             z = z_new.detach()
             y = y_new.detach()
+            # Detach GRU hidden state between stages (same convention as x/z/y)
+            if h_state is not None:
+                h_state = h_state.detach()
 
             with torch.no_grad():
                 newly = _osqp_converged_batched(
@@ -514,6 +523,9 @@ def val_epoch(
         z = torch.zeros(B, m, dtype=dtype, device=device)
         y = torch.zeros(B, m, dtype=dtype, device=device)
 
+        # GRU hidden state — reset to None (zeros) at the start of each problem
+        h_state: torch.Tensor | None = None
+
         rho_scalar = torch.full((B,), cfg.rho, dtype=dtype, device=device)
         rho_vec = batch['rho_vec'].clone()
         rho_inv = batch['rho_inv'].clone()
@@ -553,7 +565,10 @@ def val_epoch(
                     P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev, alpha_prev,
                     AT=AT,
                 )  # (B, scalar_feature_dim)
-                alpha_scalar = model(global_feat)          # (B,)
+                if isinstance(model, ScalarGRUNet):
+                    alpha_scalar, h_state = model(global_feat, h_state)  # (B,), (B, hidden)
+                else:
+                    alpha_scalar = model(global_feat)          # (B,)
                 alpha_prev   = alpha_scalar.detach()
                 alpha_z      = alpha_scalar.unsqueeze(-1)  # (B, 1)
                 alpha_x_override = alpha_z
@@ -660,8 +675,14 @@ def train(
     device = cfg.torch_device
 
     alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
-    model_name = 'ScalarAlphaNet' if alpha_mode == 'scalar' else 'PerRowAlphaNet'
-    log.info(f"Training {model_name}  [loss_type={loss_type}, alpha_mode={alpha_mode}]")
+    model_type = getattr(cfg, 'model_type', 'mlp')
+    if alpha_mode != 'scalar':
+        model_name = 'PerRowAlphaNet'
+    elif model_type == 'gru':
+        model_name = 'ScalarGRUNet'
+    else:
+        model_name = 'ScalarAlphaNet'
+    log.info(f"Training {model_name}  [loss_type={loss_type}, alpha_mode={alpha_mode}, model_type={model_type}]")
     log.info(f"  qp_types={cfg.qp_types}, qp_type_sizes={cfg.qp_type_sizes}, batch_size={cfg.batch_size}")
     log.info(f"  T={cfg.T} steps/stage, max_stages={cfg.max_stages}")
     log.info(f"  alpha range: [{cfg.alpha_min}, {cfg.alpha_max}]")
@@ -675,8 +696,11 @@ def train(
     n_va = sum(len(l) for l in val_loaders)
     log.info(f"  Total train batches: {n_tr}, Total val batches: {n_va}")
 
-    if getattr(cfg, 'alpha_mode', 'vector') == 'scalar':
-        model = ScalarAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+    if alpha_mode == 'scalar':
+        if model_type == 'gru':
+            model = ScalarGRUNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+        else:
+            model = ScalarAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     else:
         model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -812,7 +836,12 @@ if __name__ == '__main__':
     parser.add_argument('--alpha_mode', type=str, default='vector',
                         choices=['vector', 'scalar'],
                         help='vector: per-row alpha_z via PerRowAlphaNet (default); '
-                             'scalar: single alpha for both alpha_x and alpha_z via ScalarAlphaNet')
+                             'scalar: single alpha for both alpha_x and alpha_z via ScalarAlphaNet/ScalarGRUNet')
+    parser.add_argument('--model_type', type=str, default='mlp',
+                        choices=['mlp', 'gru'],
+                        help='model architecture for scalar alpha mode: '
+                             'mlp (default, memoryless MLP) or '
+                             'gru (GRU with hidden state across stages)')
     parser.add_argument('--normalize_features', action='store_true',
                         help='normalize input features to zero mean / unit std before training')
     args = parser.parse_args()
@@ -845,10 +874,12 @@ if __name__ == '__main__':
         adaptive_rho=args.adaptive_rho,
         normalize_features=args.normalize_features,
         alpha_mode=args.alpha_mode,
+        model_type=args.model_type,
         store_spectral_matrices=(args.loss == 'spectral_radius'),
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
-        data_dir='/data/engs-goulart/sedm7756/float32_optimized',
+        # data_dir='learned_osqp/data',
+        data_dir='/data/engs-goulart/sedm7756/float64_optimized',
     )
 
     if args.regen:
@@ -860,8 +891,9 @@ if __name__ == '__main__':
                 print(f"Removed dataset: {p}")
 
     if args.ckpt is None:
-        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}"
-        ckpt_path = f"learned_osqp/checkpoints/float32_optimized/{ckpt_name}.pt"
+        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}"
+        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_add_layer.pt"
+        ckpt_path = f"learned_osqp/checkpoints/float64_optimized_gru_alpha_1.3_1.9/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)

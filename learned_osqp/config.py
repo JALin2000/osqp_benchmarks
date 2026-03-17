@@ -39,8 +39,8 @@ class Config:
     # sigmoid(0) * (alpha_max - alpha_min) + alpha_min
     #   = 0.5 * (1.99 - 1.21) + 1.21 = 0.5 * 0.78 + 1.21 = 1.60  ✓
     # ------------------------------------------------------------------ #
-    alpha_min: float = 1.21
-    alpha_max: float = 1.99
+    alpha_min: float = 1.3
+    alpha_max: float = 1.9
 
     # ------------------------------------------------------------------ #
     # Rollout / training loop
@@ -94,6 +94,7 @@ class Config:
     #            predicted by ScalarAlphaNet from 7 global residual features
     alpha_mode: str = 'vector'
     scalar_feature_dim: int = 6   # dim of global features used by ScalarAlphaNet
+    model_type: str = 'mlp'       # 'mlp' or 'gru' (only applies when alpha_mode='scalar')
 
     # ------------------------------------------------------------------ #
     # Dataset storage

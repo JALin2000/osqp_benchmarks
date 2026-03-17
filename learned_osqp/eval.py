@@ -30,7 +30,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet
+from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
 from learned_osqp.data import make_dataloaders_multi
 from learned_osqp.features import compute_per_row_features, compute_global_features
 from learned_osqp.osqp_torch import (
@@ -48,7 +48,7 @@ from learned_osqp.loss import primal_residual, dual_residual
 
 @torch.no_grad()
 def learned_rollout(
-    model: PerRowAlphaNet | ScalarAlphaNet,
+    model: PerRowAlphaNet | ScalarAlphaNet | ScalarGRUNet,
     batch: dict,
     cfg: Config,
     T_total: int = 100,
@@ -92,6 +92,9 @@ def learned_rollout(
     alpha_z       = torch.full((B, m), 1.6, dtype=dtype, device=device)
     alpha_x_cur   = cfg.alpha_x  # may become (B, 1) in scalar mode
 
+    # GRU hidden state — reset to None (zeros) at solve start
+    h_state: torch.Tensor | None = None
+
     # Previous state (T steps ago); zeros at stage 0
     x_prev = torch.zeros(B, n, dtype=dtype, device=device)
     z_prev = torch.zeros(B, m, dtype=dtype, device=device)
@@ -104,7 +107,10 @@ def learned_rollout(
                 global_feat   = compute_global_features(
                     P, q, A, x, z, y, rho_scalar, x_prev, z_prev, y_prev,
                 )
-                alpha_scalar  = model(global_feat)          # (B,)
+                if isinstance(model, ScalarGRUNet):
+                    alpha_scalar, h_state = model(global_feat, h_state)  # (B,), (B, hidden)
+                else:
+                    alpha_scalar  = model(global_feat)          # (B,)
                 alpha_z       = alpha_scalar.unsqueeze(-1)  # (B, 1)
                 alpha_x_cur   = alpha_z
             else:
@@ -221,19 +227,25 @@ def evaluate(
         cfg_ckpt.device    = cfg.device
         cfg_ckpt.dtype     = cfg.dtype
         cfg_ckpt.precision = cfg.precision
-        # Back-compat: old checkpoints may not have alpha_mode / scalar_feature_dim
+        # Back-compat: old checkpoints may not have alpha_mode / scalar_feature_dim / model_type
         if not hasattr(cfg_ckpt, 'alpha_mode'):
             cfg_ckpt.alpha_mode = 'vector'
         if not hasattr(cfg_ckpt, 'scalar_feature_dim'):
             cfg_ckpt.scalar_feature_dim = 5
+        if not hasattr(cfg_ckpt, 'model_type'):
+            cfg_ckpt.model_type = 'mlp'
         cfg = cfg_ckpt
 
     device = cfg.torch_device
     dtype  = cfg.torch_dtype
 
     alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
+    model_type = getattr(cfg, 'model_type', 'mlp')
     if alpha_mode == 'scalar':
-        model = ScalarAlphaNet(cfg).to(dtype=dtype, device=device)
+        if model_type == 'gru':
+            model = ScalarGRUNet(cfg).to(dtype=dtype, device=device)
+        else:
+            model = ScalarAlphaNet(cfg).to(dtype=dtype, device=device)
     else:
         model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
     model.load_state_dict(ckpt['model_state'])
