@@ -427,7 +427,7 @@ settings = {
                          'max_iter_kacz': 5},
        
        OSQP_python:{
-             'max_iter': int(1e4),
+             'max_iter': int(1e09),
              'eps_abs': eps_low,
              'eps_rel': eps_low,
        #       'adaptive_rho': False,
@@ -437,7 +437,7 @@ settings = {
              'eps_dual_inf': 1e-15
        },
        OSQP_python_high:{
-             'max_iter': int(1e4),
+             'max_iter': int(1e09),
              'eps_abs': eps_high,
              'eps_rel': eps_high,
              'polish': False,
@@ -447,7 +447,7 @@ settings = {
              'warm_start': False
        },
        OSQP_python_neural: {
-             'max_iter': int(1e4),
+             'max_iter': int(1e09),
              'eps_abs': eps_low,
              'eps_rel': eps_low,
              'polish': False,

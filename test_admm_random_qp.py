@@ -59,7 +59,7 @@ else:
                # s.ADMM,
                # s.OSQP, s.OSQP_polish,
                ]
-    OUTPUT_FOLDER = 'neural_osqp_comparison_high_dim_test'
+    OUTPUT_FOLDER = 'optimized_neural_osqp_comparison'
 
 if verbose:
     for key in s.settings:
@@ -86,22 +86,22 @@ else:
 problems = [
             'Random QP',
             # 'Eq QP',
-            # 'Portfolio',
-            #'Lasso',
-            # 'SVM',
-            #'Huber',
-            # 'Control'
+            'Portfolio',
+            'Lasso',
+            'SVM',
+            # 'Huber',
+            'Control'
             ]
 
 problem_dimensions = {# 'Random QP': gen_int_log_space(300, 100, 1),
-                      'Random QP': gen_int_log_space(80, 50, n_dim),
+                      'Random QP': gen_int_log_space(100, 250, n_dim),
                     #   'Random QP': gen_int_log_space(200, 50, 2),
-                      'Eq QP': gen_int_log_space(10, 200, n_dim),
-                      'Portfolio': gen_int_log_space(5, 10, 5),
-                      'Lasso': gen_int_log_space(10, 50, n_dim),
-                      'SVM': gen_int_log_space(5, 10, 3),
-                      'Huber': gen_int_log_space(10, 50, n_dim),
-                      'Control': gen_int_log_space(10, 50, n_dim)}
+                    #   'Eq QP': gen_int_log_space(10, 200, n_dim),
+                      'Portfolio': gen_int_log_space(5, 25, n_dim),
+                      'Lasso': gen_int_log_space(5, 25, n_dim),
+                      'SVM': gen_int_log_space(5, 25, n_dim),
+                    #   'Huber': gen_int_log_space(10, 50, n_dim),
+                      'Control': gen_int_log_space(40, 120, n_dim)}
 
 problem_parallel = {'Random QP': parallel,
                     'Eq QP': parallel,

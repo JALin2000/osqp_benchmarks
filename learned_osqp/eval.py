@@ -113,7 +113,11 @@ def learned_rollout(
                 alpha_z = model(features)   # (B, m)
                 alpha_x_cur = cfg.alpha_x
 
-        x_prev_step, z_prev_step, y_prev_step = x.detach(), z.detach(), y.detach()
+            # Save state at start of this stage; will become x_prev for the next stage
+            x_stage_start = x.clone()
+            z_stage_start = z.clone()
+            y_stage_start = y.clone()
+
         x, z, y, _, _ = osqp_step(
             x, z, y, q, l, u, rho_vec, rho_inv,
             factors, alpha_x_cur, alpha_z, cfg.sigma, A,
@@ -122,9 +126,9 @@ def learned_rollout(
 
         step_in_stage = (step_in_stage + 1) % cfg.T
 
-        # Update prev state at stage boundaries (when features will next be computed)
+        # Update prev state at stage boundaries (matches training: prev = start of this stage)
         if step_in_stage == 0:
-            x_prev, z_prev, y_prev = x_prev_step, z_prev_step, y_prev_step
+            x_prev, z_prev, y_prev = x_stage_start, z_stage_start, y_stage_start
 
         # Adaptive rho at stage boundaries
         if cfg.adaptive_rho and step_in_stage == 0:

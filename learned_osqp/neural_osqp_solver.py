@@ -13,7 +13,7 @@ The network was trained on SCALED quantities.  Conversion rules:
     z_sc - Ax_sc  (scaled pri_res, sign matches features.py) = -E * pri_res_vec_unscaled
     Px_sc + q_sc + Asc^T * y_sc (scaled dua_res)            =  c * D * dua_res_vec_unscaled
 
-For ratio features (f[9]-f[11]) the E/c/D factors cancel in numerator/denominator, so
+For ratio features (f[9]-f[12]) the E/c/D factors cancel in numerator/denominator, so
 unscaled residuals can be used directly.
 
 All remaining features (f[0], f[1], f[4], f[7], f[8]) come from work.{z, data.l, data.u, y,
@@ -44,6 +44,16 @@ _LOG_UPPER = 1e6
 _EPS = 1e-8
 
 
+def _log10c(v: np.ndarray) -> np.ndarray:
+    """Element-wise clipped log10."""
+    return np.log10(np.clip(v, _LOG_LOWER, _LOG_UPPER))
+
+
+def _log10s(s: float) -> float:
+    """Scalar clipped log10."""
+    return float(np.log10(np.clip(s, _LOG_LOWER, _LOG_UPPER)))
+
+
 def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet | ScalarAlphaNet:
     """Load a PerRowAlphaNet or ScalarAlphaNet from a .pt checkpoint."""
     alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
@@ -70,7 +80,7 @@ class NeuralAlphaCallback:
     Zero-argument callable installed as work.learnt_component_callback.
 
     Called once before each ADMM iteration.  Every T iterations it:
-      1. Extracts 12-dim per-row features from the OSQP internal state.
+      1. Extracts 13-dim per-row features from the OSQP internal state.
       2. Runs PerRowAlphaNet → alpha_z in [alpha_min, alpha_max], shape (m,).
       3. Returns the numpy array to _osqp.update_alpha_z().
 
@@ -80,7 +90,7 @@ class NeuralAlphaCallback:
     ---------------
     work.info.{pri_res_vec, dua_res_vec} are UNSCALED.  We rescale them back to
     scaled space for features that need absolute magnitude (f[2], f[5], f[6]).
-    Ratio features (f[9]-f[11]) use unscaled values directly (scale cancels).
+    Ratio features (f[9]-f[12]) use unscaled values directly (scale cancels).
     """
 
     def __init__(self, work, model: PerRowAlphaNet, cfg: Config, T: int = 10):
@@ -89,12 +99,29 @@ class NeuralAlphaCallback:
         self.cfg = cfg
         self.T = T
         self.iter_count = 0
+        self._torch_dtype = cfg.torch_dtype
+
+        m = work.data.m
+        self._m = m
 
         # State T steps ago — unscaled residuals (for ratio features, scale cancels)
-        m = work.data.m
         self._pri_res_unscaled_prev: np.ndarray = np.zeros(m)   # E_inv*(Ax-z) prev
         self._pri_res_inf_prev: float = 0.0
         self._dua_res_inf_prev: float = 0.0
+
+        # --- Cache static quantities computed once ---
+        # A row inf-norms (scaled A) — never changes after setup
+        self._A_inf_norms = np.abs(work.data.A).max(axis=1).toarray().ravel()  # (m,)
+
+        # Scaling vectors — never change after setup
+        self._has_scaling = hasattr(work, 'scaling') and work.settings.scaling
+        if self._has_scaling:
+            self._e_vec = work.scaling.E.diagonal().copy()   # (m,)
+            self._c = float(work.scaling.c)                  # scalar
+            self._d_vec = work.scaling.D.diagonal().copy()   # (n,)
+
+        # Pre-allocate feature buffer (m, 13) — reused every call
+        self._feat_buf = np.empty((m, 13), dtype=np.float64)
 
     # ---------------------------------------------------------------- #
     # Feature computation
@@ -102,7 +129,7 @@ class NeuralAlphaCallback:
 
     def _compute_features(self) -> np.ndarray:
         """
-        Returns np.ndarray of shape (m, 12) in float64.
+        Fills and returns self._feat_buf of shape (m, 13) in float64.
 
         All per-row/per-element quantities come from the SCALED workspace.
         work.info.{pri_res_vec, dua_res_vec} are UNSCALED and rescaled below.
@@ -114,75 +141,61 @@ class NeuralAlphaCallback:
         l  = work.data.l      # (m,) scaled (may contain ±OSQP_INFTY)
         u  = work.data.u      # (m,) scaled
         rho_vec = work.rho_vec  # (m,)
-        m = len(z)
-
-        # ---- A row inf-norms (scaled A) ----
-        # Note: sparse.max(axis=1) returns sparse in newer scipy; use .toarray() to convert
-        A_inf_norms = np.abs(work.data.A).max(axis=1).toarray().ravel()  # (m,)
+        f = self._feat_buf
 
         # ---- Get unscaled residuals from work.info (populated every iter by update_info) ----
         pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
         dua_res_unscaled = getattr(work.info, 'dua_res_vec', None)
 
         if pri_res_unscaled is None:
-            # First iteration: info not yet populated — compute directly
-            pri_res_unscaled = work.data.A.dot(x) - z   # Ax_sc - z_sc (unscaled = no E_inv yet)
-            # In this case there's no scaling applied — treat as scaled directly
-            pri_res_scaled = -pri_res_unscaled          # z_sc - Ax_sc
+            pri_res_unscaled = work.data.A.dot(x) - z
+            pri_res_scaled = -pri_res_unscaled
         else:
-            # pri_res_unscaled = E_inv * (Ax_sc - z_sc)
-            # scaled pri_res = z_sc - Ax_sc = -E * pri_res_unscaled
-            if hasattr(work, 'scaling') and work.settings.scaling:
-                e_vec = work.scaling.E.diagonal()       # (m,)
-                pri_res_scaled = -e_vec * pri_res_unscaled
+            if self._has_scaling:
+                pri_res_scaled = -self._e_vec * pri_res_unscaled
             else:
                 pri_res_scaled = -pri_res_unscaled
 
         if dua_res_unscaled is None:
             dua_res_scaled = work.data.P.dot(x) + work.data.q + work.data.A.T.dot(y)
         else:
-            # dua_res_unscaled = cinv * Dinv * (Px_sc + q_sc + ATy_sc)
-            # scaled dua_res = c * D * dua_res_unscaled
-            if hasattr(work, 'scaling') and work.settings.scaling:
-                c     = work.scaling.c                  # scalar
-                d_vec = work.scaling.D.diagonal()       # (n,)
-                dua_res_scaled = c * d_vec * dua_res_unscaled
+            if self._has_scaling:
+                dua_res_scaled = self._c * self._d_vec * dua_res_unscaled
             else:
                 dua_res_scaled = dua_res_unscaled
 
         abs_pri_res = np.abs(pri_res_scaled)              # (m,)
-        sign_pri_res = np.sign(pri_res_scaled)            # (m,)
-        pri_res_inf = float(np.max(abs_pri_res)) if m > 0 else 0.0
-        dua_res_inf = float(np.max(np.abs(dua_res_scaled))) if len(dua_res_scaled) > 0 else 0.0
+        pri_res_inf = float(np.max(abs_pri_res))
+        dua_res_inf = float(np.max(np.abs(dua_res_scaled)))
 
         # T-step-ago (unscaled; ratios below cancel the scale factor E)
-        abs_pri_res_pT     = np.abs(self._pri_res_unscaled_prev)
-        pri_res_inf_pT     = self._pri_res_inf_prev
-        dua_res_inf_pT     = self._dua_res_inf_prev
+        abs_pri_res_pT = np.abs(self._pri_res_unscaled_prev)
+        pri_res_inf_pT = self._pri_res_inf_prev
+        dua_res_inf_pT = self._dua_res_inf_prev
 
-        def _log10c(v: np.ndarray) -> np.ndarray:
-            return np.log10(np.clip(v, _LOG_LOWER, _LOG_UPPER))
+        # Pre-compute scalar features (broadcast into columns below)
+        s_pri_inf = _log10s(pri_res_inf)
+        s_dua_inf = _log10s(dua_res_inf)
+        s_pri_ratio = _log10s(pri_res_inf / (pri_res_inf_pT + _EPS))
+        s_dua_ratio = _log10s(dua_res_inf / (dua_res_inf_pT + _EPS))
+        s_imbalance = _log10s(pri_res_inf / (dua_res_inf + _EPS))
 
-        def _log10s(s: float) -> float:
-            return float(np.log10(np.clip(s, _LOG_LOWER, _LOG_UPPER)))
+        # Fill feature buffer columns in-place
+        f[:, 0] = _log10c(z - l)                                        # f[0]
+        f[:, 1] = _log10c(u - z)                                        # f[1]
+        f[:, 2] = _log10c(abs_pri_res)                                   # f[2]
+        f[:, 3] = np.sign(pri_res_scaled)                                # f[3]
+        f[:, 4] = _log10c(np.abs(y))                                     # f[4]
+        f[:, 5] = s_pri_inf                                              # f[5] broadcast
+        f[:, 6] = s_dua_inf                                              # f[6] broadcast
+        f[:, 7] = _log10c(rho_vec)                                       # f[7]
+        f[:, 8] = self._A_inf_norms                                      # f[8] cached
+        f[:, 9] = _log10c(np.abs(pri_res_unscaled) / (abs_pri_res_pT + _EPS))  # f[9]
+        f[:, 10] = s_pri_ratio                                           # f[10] broadcast
+        f[:, 11] = s_dua_ratio                                           # f[11] broadcast
+        f[:, 12] = s_imbalance                                           # f[12] broadcast
 
-        f = np.stack([
-            _log10c(z - l),                                                   # f[0] log dist to lower
-            _log10c(u - z),                                                   # f[1] log dist to upper
-            _log10c(abs_pri_res),                                              # f[2] log |pri_res| (scaled)
-            sign_pri_res,                                                      # f[3] sign pri_res (scaled)
-            _log10c(np.abs(y)),                                                # f[4] log |y| (scaled)
-            np.full(m, _log10s(pri_res_inf)),                                  # f[5] log inf-norm pri_res (scaled)
-            np.full(m, _log10s(dua_res_inf)),                                  # f[6] log inf-norm dua_res (scaled)
-            _log10c(rho_vec),                                                  # f[7] log rho
-            A_inf_norms,                                                       # f[8] A row inf-norms (scaled)
-            # ratio features — scale cancels (unscaled/unscaled = scaled/scaled)
-            _log10c(np.abs(pri_res_unscaled) / (abs_pri_res_pT + _EPS)),      # f[9]  per-row ratio
-            np.full(m, _log10s(pri_res_inf / (pri_res_inf_pT + _EPS))),       # f[10] inf-norm ratio
-            np.full(m, _log10s(dua_res_inf / (dua_res_inf_pT + _EPS))),       # f[11] dua inf-norm ratio
-        ], axis=-1)   # (m, 12)
-
-        return f.astype(np.float64)
+        return f
 
     # ---------------------------------------------------------------- #
     # __call__
@@ -198,9 +211,15 @@ class NeuralAlphaCallback:
         if (self.iter_count - 1) % self.T != 0:
             return None
 
-        work = self.work
+        # Compute features FIRST (uses prev residuals from the previous stage boundary)
+        feat_np = self._compute_features()                                   # (m, 13) float64
+        feat_t  = torch.as_tensor(feat_np, dtype=self._torch_dtype).unsqueeze(0)  # (1, m, 13)
 
-        # Save current UNSCALED residuals as T-step-ago state for the next stage
+        with torch.no_grad():
+            alpha_z_t = self.model(feat_t)                                   # (1, m)
+
+        # THEN update prev residuals for the next stage boundary
+        work = self.work
         pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
         dua_res_unscaled = getattr(work.info, 'dua_res_vec', None)
 
@@ -209,13 +228,6 @@ class NeuralAlphaCallback:
             self._pri_res_inf_prev = float(np.max(np.abs(pri_res_unscaled)))
         if dua_res_unscaled is not None:
             self._dua_res_inf_prev = float(np.max(np.abs(dua_res_unscaled)))
-
-        # Compute features and run network
-        feat_np = self._compute_features()                                   # (m, 12) float64
-        feat_t  = torch.from_numpy(feat_np).to(dtype=self.cfg.torch_dtype).unsqueeze(0)  # (1, m, 12)
-
-        with torch.no_grad():
-            alpha_z_t = self.model(feat_t)                                   # (1, m)
 
         return alpha_z_t.squeeze(0).numpy()                                  # (m,)
 
@@ -226,17 +238,18 @@ class NeuralAlphaCallback:
 
 class NeuralScalarAlphaCallback:
     """
-    Scalar-alpha callback: computes 5 global residual features, runs
+    Scalar-alpha callback: computes 6 global residual features, runs
     ScalarAlphaNet → single scalar alpha, then applies it to BOTH
     alpha_x (via work.settings.alpha) and alpha_z (returned as constant
     (m,) array).
 
-    Feature vector (5-dim, matches compute_global_features):
+    Feature vector (6-dim, matches compute_global_features):
         f[0] log10(pri_res_inf_norm)        (unscaled, from work.info)
         f[1] log10(dua_res_inf_norm)        (unscaled, from work.info)
         f[2] log10(rho_scalar)              (work.settings.rho)
         f[3] log10(pri_res_inf_norm / prev)
         f[4] log10(dua_res_inf_norm / prev)
+        f[5] log10(pri_res_inf_norm / dua_res_inf_norm)  (primal/dual imbalance)
 
     Note: the ratio features use unscaled residuals; since numerator and
     denominator come from the same space the scale factor cancels, matching
@@ -249,11 +262,15 @@ class NeuralScalarAlphaCallback:
         self.cfg   = cfg
         self.T     = T
         self.iter_count = 0
+        self._torch_dtype = cfg.torch_dtype
+        self._m = work.data.m
         self._pri_res_inf_prev: float = 0.0
         self._dua_res_inf_prev: float = 0.0
+        # Pre-allocate output buffer
+        self._alpha_buf = np.empty(work.data.m, dtype=np.float64)
 
     def _compute_features(self) -> np.ndarray:
-        """Returns (5,) float64 feature vector."""
+        """Returns (6,) float64 feature vector."""
         work = self.work
 
         pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
@@ -272,15 +289,13 @@ class NeuralScalarAlphaCallback:
 
         rho_val = float(work.settings.rho)
 
-        def _log10c(v: float) -> float:
-            return float(np.log10(np.clip(v, _LOG_LOWER, _LOG_UPPER)))
-
         return np.array([
-            _log10c(pri_res_inf),
-            _log10c(dua_res_inf),
-            _log10c(rho_val),
-            _log10c(pri_res_inf / (self._pri_res_inf_prev + _EPS)),
-            _log10c(dua_res_inf / (self._dua_res_inf_prev + _EPS)),
+            _log10s(pri_res_inf),
+            _log10s(dua_res_inf),
+            _log10s(rho_val),
+            _log10s(pri_res_inf / (self._pri_res_inf_prev + _EPS)),
+            _log10s(dua_res_inf / (self._dua_res_inf_prev + _EPS)),
+            _log10s(pri_res_inf / (dua_res_inf + _EPS)),              # f[5] primal/dual imbalance
         ], dtype=np.float64)
 
     def __call__(self) -> np.ndarray | None:
@@ -291,7 +306,16 @@ class NeuralScalarAlphaCallback:
 
         work = self.work
 
-        # Save current residual norms as T-step-ago values for next stage
+        # Compute features FIRST (uses prev residuals from the previous stage boundary)
+        feat_np = self._compute_features()                                   # (6,)
+        feat_t  = torch.as_tensor(feat_np, dtype=self._torch_dtype).unsqueeze(0)  # (1, 6)
+
+        with torch.no_grad():
+            alpha_t = self.model(feat_t)  # (1,)
+
+        alpha_val = float(alpha_t.item())
+
+        # THEN update prev residuals for the next stage boundary
         pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
         dua_res_unscaled = getattr(work.info, 'dua_res_vec', None)
         if pri_res_unscaled is not None:
@@ -299,19 +323,12 @@ class NeuralScalarAlphaCallback:
         if dua_res_unscaled is not None:
             self._dua_res_inf_prev = float(np.max(np.abs(dua_res_unscaled)))
 
-        feat_np = self._compute_features()                                   # (5,)
-        feat_t  = torch.from_numpy(feat_np).to(dtype=self.cfg.torch_dtype).unsqueeze(0)  # (1, 5)
-
-        with torch.no_grad():
-            alpha_t = self.model(feat_t)  # (1,)
-
-        alpha_val = float(alpha_t.item())
-
         # Apply scalar alpha to alpha_x via settings
         work.settings.alpha = alpha_val
 
-        # Return constant (m,) array for alpha_z
-        return np.full(work.data.m, alpha_val, dtype=np.float64)
+        # Return constant (m,) array for alpha_z — reuse buffer
+        self._alpha_buf[:] = alpha_val
+        return self._alpha_buf
 
 
 # ------------------------------------------------------------------ #
