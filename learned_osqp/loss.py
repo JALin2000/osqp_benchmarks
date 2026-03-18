@@ -480,9 +480,9 @@ def scaled_residual_loss(
         q.abs().amax(dim=1).expand(x_new.shape[0]),
     ], dim=1).amax(dim=1)                                                   # (B,)
 
-    _eps = 1e-12
-    log_ratio = torch.log((r_prim + _eps) / prim_scale) \
-              - torch.log((r_dual + _eps) / dual_scale)                       # (B,)
+    _eps = 1e-8
+    log_ratio = torch.log((r_prim + _eps) / (prim_scale + _eps)) \
+              - torch.log((r_dual + _eps) / (dual_scale + _eps))              # (B,)
     loss_per_instance = log_ratio ** 2                                      # (B,) ≥ 0
 
     if mask is not None:

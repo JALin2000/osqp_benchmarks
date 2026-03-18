@@ -132,7 +132,7 @@ def compute_feature_stats(
 
     mean = feat_sum / count
     std  = (feat_sq / count - mean ** 2).clamp(min=0.0).sqrt()
-    std  = torch.where(std < 1e-6, torch.ones_like(std), std)
+    std  = torch.where(std < 1e-3, torch.ones_like(std), std)
     return mean, std
 
 
