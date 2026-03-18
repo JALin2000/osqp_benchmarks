@@ -7,9 +7,9 @@
 #SBATCH --partition=medium            # change to your CPU partition name
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=48G                       # 48 GB memory per array task
-#SBATCH --array=1-10                    
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=192G                       # 192 GB memory per array task
+#SBATCH --array=1-20                    
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -17,11 +17,26 @@ source /home/sedm7756/miniconda3/etc/profile.d/conda.sh
 conda activate rlqp
 
 # avoid oversubscription of OpenMP/MKL threads
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
 
 # ---- list your commands here (index order must match --array range) ----
 CMDS=(
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types random_qp --sizes 200 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types random_qp --sizes 200 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types svm --sizes 15 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types svm --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types control --sizes 80 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types control --sizes 80 --adaptive_rho false --normalize_features --alpha_mode scalar"
+  
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types lasso --sizes 15 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types lasso --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types portfolio --sizes 15 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train.py --loss scaled_residual --model_type gru --precision low --types portfolio --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
   "python learned_osqp/train.py --model_type gru --precision low --types random_qp --sizes 200 --normalize_features --alpha_mode scalar"
   "python learned_osqp/train.py --model_type gru --precision low --types random_qp --sizes 200 --adaptive_rho false --normalize_features --alpha_mode scalar"
 

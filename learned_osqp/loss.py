@@ -419,27 +419,32 @@ def scaled_residual_loss(
     x_new: torch.Tensor,   # (B, n) — primal after T steps  (carries gradient)
     z_new: torch.Tensor,   # (B, m) — slack  after T steps  (carries gradient)
     y_new: torch.Tensor,   # (B, m) — dual   after T steps  (carries gradient)
-    x_prev: torch.Tensor,  # (B, n) — primal before T steps (detached)
-    z_prev: torch.Tensor,  # (B, m) — slack  before T steps (detached)
-    y_prev: torch.Tensor,  # (B, m) — dual   before T steps (detached)
+    x_prev: torch.Tensor,  # (B, n) — primal before T steps (detached, unused)
+    z_prev: torch.Tensor,  # (B, m) — slack  before T steps (detached, unused)
+    y_prev: torch.Tensor,  # (B, m) — dual   before T steps (detached, unused)
     batch: dict,           # must contain P, A, q
     mask: torch.Tensor | None = None,  # (B,) bool — True = include in loss
     eps_abs: float = 1e-3,
     eps_rel: float = 1e-3,
 ) -> torch.Tensor:
     """
-    Progress-score loss:  L_ratio = s_new - s_prev
+    Residual-balance loss based on the ratio (r_prim/ε_prim) vs (r_dual/ε_dual).
 
-    s(x, z, y) = smoothmax( log(r_prim/ε_prim), log(r_dual/ε_dual) )
-               = log( r_prim/ε_prim + r_dual/ε_dual )
+        L = ( log(r_prim/ε_prim) − log(r_dual/ε_dual) )²
+          = log( (r_prim/ε_prim) / (r_dual/ε_dual) )²
 
-    Minimising L_ratio encourages s to decrease as fast as possible.
-    s ≤ 0 means both residuals are within OSQP tolerance.
-    Gradients flow through x_new, z_new, y_new; s_prev is fully detached.
+    L = 0 when r_prim/ε_prim == r_dual/ε_dual (ratio = 1).
+    L grows symmetrically in log-space as the two normalised residuals diverge,
+    penalising imbalanced convergence equally in both directions.
+
+    Gradients flow through x_new, z_new, y_new only.
+
+    ε_prim = ε_abs + ε_rel * max(||Ax||_inf, ||z||_inf)
+    ε_dual = ε_abs + ε_rel * max(||Px||_inf, ||A^T y||_inf, ||q||_inf)
 
     Args:
-        x_new/z_new/y_new  : iterates after  T steps (grad-enabled)
-        x_prev/z_prev/y_prev: iterates before T steps (detached)
+        x_new/z_new/y_new   : iterates after  T steps (grad-enabled)
+        x_prev/z_prev/y_prev: iterates before T steps (unused in this loss)
         batch    : QP data dict containing P (B,n,n), A (B,m,n), q (B,n)
         mask     : (B,) bool — if given, only True instances enter the mean
         eps_abs, eps_rel : OSQP tolerance parameters (default 1e-3)
@@ -447,16 +452,38 @@ def scaled_residual_loss(
     Returns:
         scalar loss (mean over active instances)
     """
+    # --- Old progress-score formulation (s_new - s_prev) ---
+    # P = batch['P']
+    # A = batch['A']
+    # q = batch['q']
+    # s_new = _progress_score(x_new, z_new, y_new, P, A, q, eps_abs, eps_rel)
+    # with torch.no_grad():
+    #     s_prev = _progress_score(x_prev, z_prev, y_prev, P, A, q, eps_abs, eps_rel)
+    # loss_per_instance = s_new - s_prev
+
     P = batch['P']   # (B, n, n)
     A = batch['A']   # (B, m, n)
     q = batch['q']   # (B, n)
 
-    s_new = _progress_score(x_new, z_new, y_new, P, A, q, eps_abs, eps_rel)  # (B,)
-    with torch.no_grad():
-        s_prev = _progress_score(
-            x_prev, z_prev, y_prev, P, A, q, eps_abs, eps_rel)               # (B,)
+    Ax  = torch.bmm(A, x_new.unsqueeze(-1)).squeeze(-1)                    # (B, m)
+    ATy = torch.bmm(A.transpose(1, 2), y_new.unsqueeze(-1)).squeeze(-1)    # (B, n)
+    Px  = torch.bmm(P, x_new.unsqueeze(-1)).squeeze(-1)                    # (B, n)
 
-    loss_per_instance = s_new - s_prev   # (B,)  negative = improvement
+    r_prim   = (Ax - z_new).abs().amax(dim=1)                              # (B,)
+    prim_scale = torch.maximum(
+        Ax.abs().amax(dim=1), z_new.abs().amax(dim=1))                     # (B,)
+
+    r_dual   = (Px + q + ATy).abs().amax(dim=1)                            # (B,)
+    dual_scale = torch.stack([
+        Px.abs().amax(dim=1),
+        ATy.abs().amax(dim=1),
+        q.abs().amax(dim=1).expand(x_new.shape[0]),
+    ], dim=1).amax(dim=1)                                                   # (B,)
+
+    _eps = 1e-12
+    log_ratio = torch.log((r_prim + _eps) / prim_scale) \
+              - torch.log((r_dual + _eps) / dual_scale)                       # (B,)
+    loss_per_instance = log_ratio ** 2                                      # (B,) ≥ 0
 
     if mask is not None:
         mask_f   = mask.float()

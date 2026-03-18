@@ -193,12 +193,36 @@ def compute_global_features(
     ATy_prev = torch.bmm(AT, y_prev.unsqueeze(-1)).squeeze(-1)         # (B, n)
     dua_res_inf_prev = torch.norm(Px_prev + q + ATy_prev, p=float('inf'), dim=1)  # (B,)
 
+    # ---- Scaled residuals (OSQP-style normalization) ----
+    # Scaling denominators reuse already-computed tensors — negligible overhead.
+    q_inf = torch.norm(q, p=float('inf'), dim=1)                       # (B,)
+    pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
+                                   torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
+    dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
+                     torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
+                                   q_inf)) + _EPS                       # (B,)
+    pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
+                                   torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
+    dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
+                     torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
+                                   q_inf)) + _EPS                       # (B,)
+
+    pri_res_inf_scaled      = pri_res_inf      / pri_scale       # (B,)
+    dua_res_inf_scaled      = dua_res_inf      / dua_scale       # (B,)
+    pri_res_inf_prev_scaled = pri_res_inf_prev / pri_scale_prev  # (B,)
+    dua_res_inf_prev_scaled = dua_res_inf_prev / dua_scale_prev  # (B,)
+
     return torch.stack([
-        _log10c(pri_res_inf),                                          # f[0]
-        _log10c(dua_res_inf),                                          # f[1]
+        # _log10c(pri_res_inf),                                        # f[0] (unscaled)
+        # _log10c(dua_res_inf),                                        # f[1] (unscaled)
+        _log10c(pri_res_inf_scaled),                                   # f[0] scaled primal residual
+        _log10c(dua_res_inf_scaled),                                   # f[1] scaled dual residual
         _log10c(rho_scalar),                                           # f[2]
-        _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),              # f[3]
-        _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),              # f[4]
-        _log10c(pri_res_inf / (dua_res_inf + _EPS)),                   # f[5] primal/dual imbalance
+        # _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),            # f[3] (unscaled ratio)
+        # _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),            # f[4] (unscaled ratio)
+        _log10c(pri_res_inf_scaled / (pri_res_inf_prev_scaled + _EPS)),  # f[3] scaled primal ratio
+        _log10c(dua_res_inf_scaled / (dua_res_inf_prev_scaled + _EPS)),  # f[4] scaled dual ratio
+        # _log10c(pri_res_inf / (dua_res_inf + _EPS)),                 # f[5] (unscaled imbalance)
+        _log10c(pri_res_inf_scaled / (dua_res_inf_scaled + _EPS)),     # f[5] scaled primal/dual imbalance
         # alpha,                                                        # (commented out) previous-stage alpha
     ], dim=-1)  # (B, 6)

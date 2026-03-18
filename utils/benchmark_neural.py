@@ -147,9 +147,16 @@ def compute_stats_info_split(all_solvers, output_folder, problems=None,
     compute_failure_rates(all_solvers, output_folder)
     compute_shifted_geometric_means(all_solvers, output_folder)
 
-    # Split solvers into arho / no_arho groups
-    arho_solvers = [s_ for s_ in all_solvers if 'no_arho' not in s_]
-    no_arho_solvers = [s_ for s_ in all_solvers if 'no_arho' in s_]
+    # Split solvers into arho / no_arho groups based on OSQP *runtime* arho setting.
+    # Cross-test names embed the osqp setting as '_noarho_osqp_' or '_arho_osqp_'.
+    # Existing/baseline names use the plain 'no_arho' / 'arho' suffix convention.
+    def _osqp_uses_arho(name):
+        if '_osqp_' in name:
+            return '_noarho_osqp_' not in name   # cross-test: check osqp part
+        return 'no_arho' not in name              # existing names
+
+    arho_solvers = [s_ for s_ in all_solvers if _osqp_uses_arho(s_)]
+    no_arho_solvers = [s_ for s_ in all_solvers if not _osqp_uses_arho(s_)]
 
     results_dir = os.path.join('.', 'results', output_folder)
 

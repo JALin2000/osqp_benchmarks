@@ -262,7 +262,8 @@ class NeuralScalarAlphaCallback:
     the training pipeline exactly.
     """
 
-    def __init__(self, work, model: ScalarAlphaNet | ScalarGRUNet, cfg: Config, T: int = 10):
+    def __init__(self, work, model: ScalarAlphaNet | ScalarGRUNet, cfg: Config,
+                 T: int = 10, record_history: bool = False):
         self.work  = work
         self.model = model
         self.cfg   = cfg
@@ -277,9 +278,13 @@ class NeuralScalarAlphaCallback:
         # GRU hidden state — None means zeros (reset at start of each solve)
         self._is_gru: bool = isinstance(model, ScalarGRUNet)
         self._h: torch.Tensor | None = None  # (1, hidden_dim)
+        # History recording (opt-in; adds 2 sparse matvecs per stage boundary)
+        self._record_history = record_history
+        self._q_inf = float(np.max(np.abs(work.data.q))) if work.data.q.size else 0.0
+        self._history: dict = {'iter': [], 'alpha': [], 'scaled_prim': [], 'scaled_dual': []}
 
-    def _compute_features(self) -> np.ndarray:
-        """Returns (6,) float64 feature vector."""
+    def _compute_features(self) -> tuple[np.ndarray, float, float]:
+        """Returns ((6,) feature vector, pri_res_inf, dua_res_inf)."""
         work = self.work
 
         pri_res_unscaled = getattr(work.info, 'pri_res_vec', None)
@@ -298,7 +303,7 @@ class NeuralScalarAlphaCallback:
 
         rho_val = float(work.settings.rho)
 
-        return np.array([
+        features = np.array([
             _log10s(pri_res_inf),
             _log10s(dua_res_inf),
             _log10s(rho_val),
@@ -306,6 +311,38 @@ class NeuralScalarAlphaCallback:
             _log10s(dua_res_inf / (self._dua_res_inf_prev + _EPS)),
             _log10s(pri_res_inf / (dua_res_inf + _EPS)),              # f[5] primal/dual imbalance
         ], dtype=np.float64)
+        return features, pri_res_inf, dua_res_inf
+
+    def _compute_scaled_residuals(self, pri_res_inf: float, dua_res_inf: float) -> tuple[float, float]:
+        """
+        Compute scaled_prim and scaled_dual using current work iterates.
+        Requires 2 sparse matvecs (P @ x, A.T @ y); called only when record_history=True.
+        """
+        work = self.work
+
+        # scaled_prim = ||Ax - z||_inf / max(||Ax||_inf, ||z||_inf)
+        pri_res_vec = getattr(work.info, 'pri_res_vec', None)
+        if pri_res_vec is not None:
+            Ax_inf = float(np.max(np.abs(pri_res_vec + work.z)))  # Ax = r_prim + z
+        else:
+            Ax_inf = float(np.max(np.abs(work.data.A.dot(work.x))))
+        z_inf = float(np.max(np.abs(work.z)))
+        denom_prim = max(Ax_inf, z_inf, _EPS)
+        sc_prim = pri_res_inf / denom_prim
+
+        # scaled_dual = ||Px + q + ATy||_inf / max(||Px||_inf, ||ATy||_inf, ||q||_inf)
+        Px  = work.data.P.dot(work.x)
+        ATy = work.data.A.T.dot(work.y)
+        Px_inf  = float(np.max(np.abs(Px)))  if Px.size > 0 else 0.0
+        ATy_inf = float(np.max(np.abs(ATy)))
+        denom_dual = max(Px_inf, ATy_inf, self._q_inf, _EPS)
+        sc_dual = dua_res_inf / denom_dual
+
+        return sc_prim, sc_dual
+
+    def get_history(self) -> dict | None:
+        """Return recorded history dict, or None if record_history=False."""
+        return self._history if self._record_history else None
 
     def __call__(self) -> np.ndarray | None:
         """Returns constant (m,) alpha array at stage boundaries, else None."""
@@ -316,7 +353,7 @@ class NeuralScalarAlphaCallback:
         work = self.work
 
         # Compute features FIRST (uses prev residuals from the previous stage boundary)
-        feat_np = self._compute_features()                                   # (6,)
+        feat_np, pri_res_inf, dua_res_inf = self._compute_features()         # (6,), float, float
         feat_t  = torch.as_tensor(feat_np, dtype=self._torch_dtype).unsqueeze(0)  # (1, 6)
 
         with torch.no_grad():
@@ -334,6 +371,14 @@ class NeuralScalarAlphaCallback:
             self._pri_res_inf_prev = float(np.max(np.abs(pri_res_unscaled)))
         if dua_res_unscaled is not None:
             self._dua_res_inf_prev = float(np.max(np.abs(dua_res_unscaled)))
+
+        # Record history at this stage boundary (opt-in)
+        if self._record_history:
+            sc_prim, sc_dual = self._compute_scaled_residuals(pri_res_inf, dua_res_inf)
+            self._history['iter'].append(self.iter_count)
+            self._history['alpha'].append(alpha_val)
+            self._history['scaled_prim'].append(sc_prim)
+            self._history['scaled_dual'].append(sc_dual)
 
         # Apply scalar alpha to alpha_x via settings
         work.settings.alpha = alpha_val
@@ -365,12 +410,14 @@ class NeuralOSQPSolver:
         cfg: Config | None = None,
         T: int = 10,
         alpha_mode: str = 'vector',
+        record_history: bool = False,
     ):
         self._cfg = cfg or Config()
         self._cfg.alpha_mode = alpha_mode
         self._nn = _load_model(checkpoint_path, self._cfg)
         self._T = T
         self._alpha_mode = alpha_mode
+        self._record_history = record_history
         self._osqp = _OSQPInterface()   # underlying solver
         self._callback: NeuralAlphaCallback | NeuralScalarAlphaCallback | None = None
 
@@ -392,7 +439,10 @@ class NeuralOSQPSolver:
         # Install callback on the internal _osqp.OSQP work object
         work = self._osqp._model.work
         if self._alpha_mode == 'scalar':
-            self._callback = NeuralScalarAlphaCallback(work, self._nn, self._cfg, self._T)
+            self._callback = NeuralScalarAlphaCallback(
+                work, self._nn, self._cfg, self._T,
+                record_history=self._record_history,
+            )
         else:
             self._callback = NeuralAlphaCallback(work, self._nn, self._cfg, self._T)
         work.learnt_component_callback = self._callback
@@ -400,6 +450,16 @@ class NeuralOSQPSolver:
     def solve(self, total_iters=None):
         """Solve and return the Results object from _osqp."""
         return self._osqp.solve(total_iters=total_iters)
+
+    def get_alpha_history(self) -> dict | None:
+        """Return per-stage-boundary history dict from the scalar alpha callback.
+
+        Returns None if alpha_mode != 'scalar' or record_history=False.
+        Keys: 'iter', 'alpha', 'scaled_prim', 'scaled_dual' (all lists).
+        """
+        if isinstance(self._callback, NeuralScalarAlphaCallback):
+            return self._callback.get_history()
+        return None
 
     def warm_start(self, x=None, y=None):
         return self._osqp.warm_start(x=x, y=y)

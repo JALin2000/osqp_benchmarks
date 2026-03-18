@@ -52,6 +52,7 @@ from learned_osqp.features import compute_per_row_features, compute_global_featu
 
 from learned_osqp.osqp_torch import (
     factorize_kkt,
+    selective_factorize_kkt,
     rollout_T_steps,
     maybe_update_rho,
 )
@@ -436,7 +437,8 @@ def train_epoch(
                 )
                 rho_updates += (rho_updated.cpu() & ~osqp_done).float()
                 if rho_updated.any():
-                    factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
+                    factors = selective_factorize_kkt(
+                        factors, P, A, cfg.sigma, rho_vec, AT, rho_updated)
 
         if n_active_stages > 0:
             avg_loss = stage_loss / n_active_stages
@@ -621,7 +623,8 @@ def val_epoch(
                 )
                 rho_updates += (rho_updated.cpu() & ~osqp_done).float()
                 if rho_updated.any():
-                    factors = factorize_kkt(P, A, cfg.sigma, rho_vec, AT=AT)
+                    factors = selective_factorize_kkt(
+                        factors, P, A, cfg.sigma, rho_vec, AT, rho_updated)
 
         if n_active > 0:
             total_loss += stage_loss / n_active
@@ -813,7 +816,7 @@ if __name__ == '__main__':
                              'If omitted, --n is used for all types.')
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch', type=int, default=10)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=5e-5)
     parser.add_argument('--T', type=int, default=10, help='steps per stage')
     parser.add_argument('--stages', type=int, default=2000, help='max stages')
     parser.add_argument('--n_train', type=int, default=50)
@@ -891,9 +894,9 @@ if __name__ == '__main__':
                 print(f"Removed dataset: {p}")
 
     if args.ckpt is None:
-        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}"
-        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_add_layer.pt"
-        ckpt_path = f"learned_osqp/checkpoints/float64_optimized_gru_alpha_1.3_1.9/{ckpt_name}.pt"
+        ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}_loss={args.loss}"
+        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_1111.pt"
+        ckpt_path = f"learned_osqp/checkpoints/0318_feat_pri_dua_res_scaled_alpha_1.3_1.9/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)

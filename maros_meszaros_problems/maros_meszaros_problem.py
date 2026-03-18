@@ -6,6 +6,7 @@ import pandas as pd
 from solvers.solvers import SOLVER_MAP
 from problem_classes.maros_meszaros import MarosMeszaros
 from utils.general import make_sure_path_exists
+from utils.plot_alpha import plot_alpha_history
 from utils.maros_meszaros import OPT_COST_MAP
 
 import numpy as np
@@ -31,6 +32,7 @@ class MarosMeszarosRunner(object):
         lst_probs = [f for f in os.listdir(problems_dir) if \
             f.endswith('.mat')]
         self.problems = [f[:-4] for f in lst_probs]   # List of problem names
+        self.problems = self.problems[:8]  # TODO: Only use first 8 problems for now
 
     def solve(self, parallel=True, cores=32):
         '''
@@ -127,8 +129,19 @@ class MarosMeszarosRunner(object):
         print(" - Solving %s with solver %s" % (problem, solver))
 
         # Solve problem
-        s = SOLVER_MAP[solver](settings)
-        results = s.solve(instance)
+        # OSQP_python* solvers use setup()+solve() rather than __init__(settings)+solve(instance)
+        if solver[:11] == 'OSQP_python':
+            s = SOLVER_MAP[solver]()
+            s.setup(P=instance.qp_problem['P'],
+                    q=instance.qp_problem['q'],
+                    A=instance.qp_problem['A'],
+                    l=instance.qp_problem['l'],
+                    u=instance.qp_problem['u'],
+                    **settings)
+            results = s.solve()
+        else:
+            s = SOLVER_MAP[solver](settings)
+            results = s.solve(instance)
 
         # Create solution as pandas table
         P = instance.qp_problem['P']
@@ -167,11 +180,22 @@ class MarosMeszarosRunner(object):
 
         # Add status polish if OSQP
         if solver[:4] == 'OSQP':
-            solution_dict['status_polish'] = results.status_polish
+            # solution_dict['status_polish'] = results.status_polish
             solution_dict['setup_time'] = results.setup_time
             solution_dict['solve_time'] = results.solve_time
             solution_dict['update_time'] = results.update_time
             solution_dict['rho_updates'] = results.rho_updates
+
+        # Save per-instance alpha history plot for neural scalar-alpha solvers
+        if hasattr(s, 'get_alpha_history'):
+            hist = s.get_alpha_history()
+            if hist and hist['iter']:
+                plot_dir = os.path.join('.', 'results', self.output_folder,
+                                        solver, 'alpha_plots')
+                make_sure_path_exists(plot_dir)
+                fname = os.path.join(plot_dir, f'alpha_{problem}.png')
+                title = f'MarosMeszaros {problem} | {solver}'
+                plot_alpha_history(hist, title, fname)
 
         print(" - Solved %s with solver %s" % (problem, solver))
 

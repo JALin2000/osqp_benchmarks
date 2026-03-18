@@ -6,6 +6,7 @@ import pandas as pd
 from solvers.solvers import SOLVER_MAP
 from problem_classes.suitesparse_lasso import SuitesparseLasso
 from utils.general import make_sure_path_exists
+from utils.plot_alpha import plot_alpha_history
 
 import numpy as np
 
@@ -138,8 +139,20 @@ class SuitesparseRunner(object):
         print(" - Solving %s with solver %s" % (problem, solver))
 
         # Solve problem
-        s = SOLVER_MAP[solver](settings)
-        results = s.solve(instance)
+        # OSQP_python* solvers (pure-Python OSQP and Neural) use setup()+solve()
+        # rather than __init__(settings)+solve(instance)
+        if solver[:11] == 'OSQP_python':
+            s = SOLVER_MAP[solver]()
+            s.setup(P=instance.qp_problem['P'],
+                    q=instance.qp_problem['q'],
+                    A=instance.qp_problem['A'],
+                    l=instance.qp_problem['l'],
+                    u=instance.qp_problem['u'],
+                    **settings)
+            results = s.solve()
+        else:
+            s = SOLVER_MAP[solver](settings)
+            results = s.solve(instance)
 
         # Create solution as pandas table
         P = instance.qp_problem['P']
@@ -159,11 +172,22 @@ class SuitesparseRunner(object):
 
         # Add status polish if OSQP
         if solver[:4] == 'OSQP':
-            solution_dict['status_polish'] = results.status_polish
+            # solution_dict['status_polish'] = results.status_polish
             solution_dict['setup_time'] = results.setup_time
             solution_dict['solve_time'] = results.solve_time
             solution_dict['update_time'] = results.update_time
             solution_dict['rho_updates'] = results.rho_updates
+
+        # Save per-instance alpha history plot for neural scalar-alpha solvers
+        if hasattr(s, 'get_alpha_history'):
+            hist = s.get_alpha_history()
+            if hist and hist['iter']:
+                plot_dir = os.path.join('.', 'results', self.output_folder,
+                                        solver, self.name, 'alpha_plots')
+                make_sure_path_exists(plot_dir)
+                fname = os.path.join(plot_dir, f'alpha_{problem}.png')
+                title = f'{self.name} {problem} | {solver}'
+                plot_alpha_history(hist, title, fname)
 
         print(" - Solved %s with solver %s" % (problem, solver))
 

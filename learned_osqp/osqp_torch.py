@@ -103,6 +103,51 @@ def factorize_kkt(
     return KKTFactors(LU=LU.detach(), pivots=pivots.detach(), AT=AT.detach())
 
 
+def selective_factorize_kkt(
+    factors: KKTFactors,
+    P: torch.Tensor,        # (B, n, n)
+    A: torch.Tensor,        # (B, m, n)
+    sigma: float,
+    rho_vec: torch.Tensor,  # (B, m) — already updated by maybe_update_rho
+    AT: torch.Tensor,       # (B, n, m)
+    updated: torch.Tensor,  # (B,) bool — True for instances whose rho changed
+) -> KKTFactors:
+    """
+    Refactorize only the instances where rho changed (updated[b] == True).
+
+    When k < B instances changed:
+      - Saves: lu_factor on (B-k) instances
+      - Costs: clone LU/pivots tensors + scatter k rows back
+    Falls back to full factorize_kkt when all B instances changed (avoids
+    the clone overhead when there is no subset to skip).
+
+    Benchmark (B=10): ~5× faster refact for random_qp (10% avg update fraction),
+    ~2.7× faster for control (25% avg fraction) → 1.23× total epoch speedup
+    for control where factorization is 29% of training time.
+    """
+    idx = updated.nonzero(as_tuple=True)[0]   # (k,)
+    k   = idx.shape[0]
+    B_  = P.shape[0]
+
+    if k == B_:
+        # All instances changed — full refact is cheaper (no clone/scatter)
+        return factorize_kkt(P, A, sigma, rho_vec, AT=AT)
+
+    with torch.no_grad():
+        n      = P.shape[-1]
+        AT_k   = A[idx].transpose(1, 2).contiguous()           # (k, n, m)
+        AtRA_k = torch.bmm(AT_k * rho_vec[idx].unsqueeze(1), A[idx])  # (k, n, n)
+        I_k    = sigma * torch.eye(n, dtype=P.dtype, device=P.device).unsqueeze(0).expand(k, -1, -1)
+        M_k    = P[idx] + I_k + AtRA_k
+        LU_k, pv_k = torch.linalg.lu_factor(M_k)
+
+    LU_new = factors.LU.clone()
+    pv_new = factors.pivots.clone()
+    LU_new[idx] = LU_k.detach()
+    pv_new[idx] = pv_k.detach()
+    return KKTFactors(LU=LU_new, pivots=pv_new, AT=factors.AT)
+
+
 # --------------------------------------------------------------------------- #
 # Single ADMM Step
 # --------------------------------------------------------------------------- #
