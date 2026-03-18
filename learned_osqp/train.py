@@ -329,9 +329,9 @@ def train_epoch(
         n_active_stages = 0
 
         # Per-instance tracking
-        osqp_iters  = torch.full((B,), float(cfg.max_stages * cfg.T))
-        osqp_done   = torch.zeros(B, dtype=torch.bool)
-        rho_updates = torch.zeros(B)
+        osqp_iters  = torch.full((B,), float(cfg.max_stages * cfg.T), device=device)
+        osqp_done   = torch.zeros(B, dtype=torch.bool, device=device)
+        rho_updates = torch.zeros(B, device=device)
 
         # Previous state (T steps ago); zeros at stage 0
         x_prev = torch.zeros(B, n, dtype=dtype, device=device)
@@ -435,7 +435,7 @@ def train_epoch(
                 rho_scalar, rho_vec, rho_inv, rho_updated = maybe_update_rho(
                     _batch_rho, x, z, y, rho_scalar, cfg
                 )
-                rho_updates += (rho_updated.cpu() & ~osqp_done).float()
+                rho_updates += (rho_updated & ~osqp_done).float()
                 if rho_updated.any():
                     factors = selective_factorize_kkt(
                         factors, P, A, cfg.sigma, rho_vec, AT, rho_updated)
@@ -535,9 +535,9 @@ def val_epoch(
 
         stage_loss = 0.0
         n_active = 0
-        osqp_iters  = torch.full((B,), float(cfg.max_stages * cfg.T))
-        osqp_done   = torch.zeros(B, dtype=torch.bool)
-        rho_updates = torch.zeros(B)
+        osqp_iters  = torch.full((B,), float(cfg.max_stages * cfg.T), device=device)
+        osqp_done   = torch.zeros(B, dtype=torch.bool, device=device)
+        rho_updates = torch.zeros(B, device=device)
 
         # Previous state (T steps ago); zeros at stage 0
         x_prev = torch.zeros(B, n, dtype=dtype, device=device)
@@ -621,7 +621,7 @@ def val_epoch(
                 rho_scalar, rho_vec, rho_inv, rho_updated = maybe_update_rho(
                     _batch_rho, x, z, y, rho_scalar, cfg
                 )
-                rho_updates += (rho_updated.cpu() & ~osqp_done).float()
+                rho_updates += (rho_updated & ~osqp_done).float()
                 if rho_updated.any():
                     factors = selective_factorize_kkt(
                         factors, P, A, cfg.sigma, rho_vec, AT, rho_updated)
