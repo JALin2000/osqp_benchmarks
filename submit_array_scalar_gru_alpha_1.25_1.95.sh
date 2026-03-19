@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=384G                       # 384 GB memory per array task
+#SBATCH --mem=128G                       # 384 GB memory per array task
 #SBATCH --array=1-12                    
 
 # ---- environment setup ----

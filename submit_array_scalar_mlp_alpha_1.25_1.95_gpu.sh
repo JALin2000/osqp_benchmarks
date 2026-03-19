@@ -8,8 +8,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=384G                       # 384 GB memory per array task
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G                       # 384 GB memory per array task
 #SBATCH --array=1-12                    
 
 # ---- environment setup ----
