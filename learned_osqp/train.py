@@ -46,6 +46,7 @@ if _REPO_ROOT not in sys.path:
 from learned_osqp.config import Config
 from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
 import itertools
+import random
 from learned_osqp.data import make_dataloaders_multi, dataset_path
 from learned_osqp.features import compute_per_row_features, compute_global_features
 
@@ -57,6 +58,15 @@ from learned_osqp.osqp_torch import (
     maybe_update_rho,
 )
 from learned_osqp.loss import log_convergence_loss, convergence_mask, spectral_radius_loss, scaled_residual_loss
+
+
+def seed_everything(seed: int = 42) -> None:
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # --------------------------------------------------------------------------- #
@@ -108,7 +118,7 @@ def compute_feature_stats(
             alpha_stats = torch.full((B,), 1.6, dtype=dtype, device=device)
 
             for _ in range(n_stages):
-                x_prev, z_prev, y_prev = x, z, y
+                x_prev, z_prev, y_prev = x.clone(), z.clone(), y.clone()
 
                 if scalar_mode:
                     feat = compute_global_features(
@@ -670,6 +680,8 @@ def train(
     """
     if cfg is None:
         cfg = Config()
+
+    seed_everything(42)
 
     ckpt_path = Path(checkpoint_path)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)

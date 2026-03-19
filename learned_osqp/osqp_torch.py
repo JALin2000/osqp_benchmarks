@@ -210,6 +210,14 @@ def osqp_step(
     delta_y = rho_vec * (z_bar - z_new)                # (B, m)
     y_new = y + delta_y                                 # (B, m)
 
+    # Force CUDA to complete all kernels before returning.
+    # Without this, repeated osqp_step calls in a tight loop produce
+    # non-deterministic results on CUDA (different from CPU) — likely due
+    # to cuBLAS workspace reuse / non-deterministic algorithm selection
+    # that depends on kernel launch timing.
+    if x.is_cuda:
+        torch.cuda.synchronize()
+
     return x_new, z_new, y_new, x_tilde, z_tilde
 
 
