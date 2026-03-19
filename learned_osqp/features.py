@@ -4,16 +4,20 @@ features.py — Per-row feature computation for PerRowAlphaNet.
 Computes a (B, m, feature_dim) tensor of per-constraint-row features
 from the current OSQP iterate state (x, z, y) and problem data.
 
-Feature vector per row i (feature_dim = 9):
-    f[0] = A[i,:] @ x_k                          constraint activation (raw)
-    f[1] = z_k[i]                                current slack
-    f[2] = y_k[i]                                current dual variable
-    f[3] = l[i]  (clamped to [-1e6, 1e6])        lower bound
-    f[4] = u[i]  (clamped to [-1e6, 1e6])        upper bound
-    f[5] = A[i,:] @ x_star                       optimal constraint activation
-    f[6] = A[i,:] @ x_k - z_k[i]                primal residual for this row
-    f[7] = (A[i,:] @ x_k) / (||A[i,:]|| + eps)  normalized activation
-    f[8] = primal_residual_i / (||A[i,:]|| + eps) normalized residual
+Feature vector per row i (feature_dim = 13):
+    f[0]  = log10(clamp(z_i - l_i))                      log distance to lower bound
+    f[1]  = log10(clamp(u_i - z_i))                      log distance to upper bound
+    f[2]  = log10(clamp(|pri_res_i| / pri_scale))         log scaled absolute primal residual
+    f[3]  = sign(pri_res_i)                               sign of primal residual
+    f[4]  = log10(clamp(|y_i|))                           log absolute dual variable
+    f[5]  = log10(clamp(||pri_res||_inf / pri_scale))     log scaled primal residual inf norm (broadcast)
+    f[6]  = log10(clamp(||dua_res||_inf / dua_scale))     log scaled dual residual inf norm (broadcast)
+    f[7]  = log10(clamp(rho_i))                           log penalty parameter
+    f[8]  = ||A[i,:]||_inf                                row inf norm of A
+    f[9]  = log10(clamp(scaled_|pri_res_i| / scaled_|pri_res_i_prev|))  scaled per-row primal ratio
+    f[10] = log10(clamp(scaled_||pri||_inf / scaled_||pri_prev||_inf))  scaled primal inf norm ratio (broadcast)
+    f[11] = log10(clamp(scaled_||dua||_inf / scaled_||dua_prev||_inf))  scaled dual inf norm ratio (broadcast)
+    f[12] = log10(clamp(scaled_||pri||_inf / scaled_||dua||_inf))       scaled primal/dual imbalance (broadcast)
 
 Notes:
   - l and u are clamped to ±1e6 only for the feature vector. The raw tensors
@@ -49,7 +53,7 @@ def compute_per_row_features(
     z: torch.Tensor,          # (B, m)  current slack
     y: torch.Tensor,          # (B, m)  current dual
     rho_vec: torch.Tensor,    # (B, m)
-    x_star: torch.Tensor,     # (B, n)
+    x_star: torch.Tensor,     # (B, n)  only for debugging/analysis, not used in features
     x_prev: torch.Tensor,     # (B, n)  primal T steps ago  (zeros at stage 0)
     z_prev: torch.Tensor,     # (B, m)  slack  T steps ago
     y_prev: torch.Tensor,     # (B, m)  dual   T steps ago
@@ -103,6 +107,26 @@ def compute_per_row_features(
     ATy_prev = torch.bmm(AT, y_prev.unsqueeze(-1)).squeeze(-1)           # (B, n)
     dua_res_inf_norm_prev = torch.norm(Px_prev + q + ATy_prev, p=float('inf'), dim=1)  # (B,)
 
+    # ---- Scaled residuals (OSQP-style normalization) ----
+    q_inf = torch.norm(q, p=float('inf'), dim=1)                         # (B,)
+    pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
+                                   torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
+    dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
+                     torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
+                                   q_inf)) + _EPS                         # (B,)
+    pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
+                                   torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
+    dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
+                     torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
+                                   q_inf)) + _EPS                         # (B,)
+
+    # Scaled versions — pri_scale is (B,), broadcast to (B, m) for per-row features
+    abs_pri_res_vec_scaled      = abs_pri_res_vec      / pri_scale.unsqueeze(1)       # (B, m)
+    abs_pri_res_vec_prev_scaled = abs_pri_res_vec_prev / pri_scale_prev.unsqueeze(1)  # (B, m)
+    pri_res_inf_norm_scaled      = pri_res_inf_norm      / pri_scale       # (B,)
+    dua_res_inf_norm_scaled      = dua_res_inf_norm      / dua_scale       # (B,)
+    pri_res_inf_norm_prev_scaled = pri_res_inf_norm_prev / pri_scale_prev  # (B,)
+    dua_res_inf_norm_prev_scaled = dua_res_inf_norm_prev / dua_scale_prev  # (B,)
 
 
     # ---- Stack all features along the last dimension ----
@@ -123,17 +147,24 @@ def compute_per_row_features(
     features = torch.stack([
         torch.log10(torch.clamp(lower_dist, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[0] log distance to lower bound
         torch.log10(torch.clamp(upper_dist, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[1] log distance to upper bound
-        torch.log10(torch.clamp(abs_pri_res_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log absolute primal residual
+        # torch.log10(torch.clamp(abs_pri_res_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log absolute primal residual (unscaled)
+        torch.log10(torch.clamp(abs_pri_res_vec_scaled, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log scaled absolute primal residual
         sign_pri_res_vec,  # f[3] sign of primal residual
         torch.log10(torch.clamp(abs_y, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[4] log absolute dual variable
-        torch.log10(torch.clamp(pri_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log infinity norm of primal residual
-        torch.log10(torch.clamp(dua_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log infinity norm of dual residual
+        # torch.log10(torch.clamp(pri_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log infinity norm of primal residual (unscaled)
+        # torch.log10(torch.clamp(dua_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log infinity norm of dual residual (unscaled)
+        torch.log10(torch.clamp(pri_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log scaled infinity norm of primal residual
+        torch.log10(torch.clamp(dua_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log scaled infinity norm of dual residual
         torch.log10(torch.clamp(rho_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[7] log of penalty parameter
-        A_inf_norm,
-        torch.log10(torch.clamp(abs_pri_res_vec / (abs_pri_res_vec_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] ratio of current to previous primal residual (elementwise)
-        torch.log10(torch.clamp(pri_res_inf_norm / (pri_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] ratio of current to previous primal residual (inf norm)
-        torch.log10(torch.clamp(dua_res_inf_norm / (dua_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] ratio of current to previous dual residual (inf norm)
-        torch.log10(torch.clamp(pri_res_inf_norm / (dua_res_inf_norm + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log scaled primal/dual imbalance
+        A_inf_norm,  # f[8]
+        # torch.log10(torch.clamp(abs_pri_res_vec / (abs_pri_res_vec_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] ratio of current to previous primal residual (elementwise, unscaled)
+        torch.log10(torch.clamp(abs_pri_res_vec_scaled / (abs_pri_res_vec_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] scaled ratio of current to previous primal residual (elementwise)
+        # torch.log10(torch.clamp(pri_res_inf_norm / (pri_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] ratio of current to previous primal residual (inf norm, unscaled)
+        # torch.log10(torch.clamp(dua_res_inf_norm / (dua_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] ratio of current to previous dual residual (inf norm, unscaled)
+        torch.log10(torch.clamp(pri_res_inf_norm_scaled / (pri_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] scaled ratio of current to previous primal residual (inf norm)
+        torch.log10(torch.clamp(dua_res_inf_norm_scaled / (dua_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] scaled ratio of current to previous dual residual (inf norm)
+        # torch.log10(torch.clamp(pri_res_inf_norm / (dua_res_inf_norm + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log primal/dual imbalance (unscaled)
+        torch.log10(torch.clamp(pri_res_inf_norm_scaled / (dua_res_inf_norm_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log scaled primal/dual imbalance
     ], dim=-1)  # (B, m, 13)
 
     return features
