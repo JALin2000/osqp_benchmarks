@@ -281,7 +281,7 @@ class ScalarGRUNet(nn.Module):
                 nn.init.xavier_uniform_(module.weight, gain=0.5)
                 nn.init.zeros_(module.bias)
         # Output layer: near-zero init → sigmoid(0) → alpha ≈ 1.6
-        nn.init.normal_(self.output_layer.weight, std=0.2)
+        nn.init.normal_(self.output_layer.weight, std=0.1)
         nn.init.zeros_(self.output_layer.bias)
 
     def forward(

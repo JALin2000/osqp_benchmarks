@@ -646,7 +646,7 @@ def make_dataloaders_multi(
     for type_name in cfg.qp_types:
         train_ds, val_ds = load_or_generate_type(type_name, cfg, verbose)
         train_loader = DataLoader(
-            train_ds, batch_size=cfg.batch_size, shuffle=False,
+            train_ds, batch_size=cfg.batch_size, shuffle=True,
             collate_fn=collate_fn, drop_last=True,
         )
         val_loader = DataLoader(

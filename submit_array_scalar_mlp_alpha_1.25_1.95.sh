@@ -8,8 +8,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=192G                       # 192 GB memory per array task
-#SBATCH --array=1-20                    
+#SBATCH --mem=384G                       # 192 GB memory per array task
+#SBATCH --array=1-10                    
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -22,21 +22,6 @@ export MKL_NUM_THREADS=4
 
 # ---- list your commands here (index order must match --array range) ----
 CMDS=(
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types random_qp --sizes 200 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types random_qp --sizes 200 --adaptive_rho false --normalize_features --alpha_mode scalar"
-
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types svm --sizes 15 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types svm --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
-
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types control --sizes 80 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types control --sizes 80 --adaptive_rho false --normalize_features --alpha_mode scalar"
-  
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types lasso --sizes 15 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types lasso --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
-
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types portfolio --sizes 15 --normalize_features --alpha_mode scalar"
-  "python learned_osqp/train.py --loss scaled_residual --precision low --types portfolio --sizes 15 --adaptive_rho false --normalize_features --alpha_mode scalar"
-
   "python learned_osqp/train.py --precision low --types random_qp --sizes 200 --normalize_features --alpha_mode scalar"
   "python learned_osqp/train.py --precision low --types random_qp --sizes 200 --adaptive_rho false --normalize_features --alpha_mode scalar"
 

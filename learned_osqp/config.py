@@ -37,10 +37,10 @@ class Config:
     # ------------------------------------------------------------------ #
     # Learned alpha range
     # sigmoid(0) * (alpha_max - alpha_min) + alpha_min
-    #   = 0.5 * (1.99 - 1.21) + 1.21 = 0.5 * 0.78 + 1.21 = 1.60  ✓
+    #   = 0.5 * (1.95 - 1.25) + 1.25 = 0.5 * 0.7 + 1.25 = 1.6  ✓
     # ------------------------------------------------------------------ #
-    alpha_min: float = 1.3
-    alpha_max: float = 1.9
+    alpha_min: float = 1.25
+    alpha_max: float = 1.95
 
     # ------------------------------------------------------------------ #
     # Rollout / training loop
@@ -58,12 +58,12 @@ class Config:
     # ------------------------------------------------------------------ #
     # Training
     # ------------------------------------------------------------------ #
-    lr: float = 1e-4             # AdamW learning rate
+    lr: float = 5e-5             # AdamW learning rate
     weight_decay: float = 1e-4   # AdamW weight decay
     batch_size: int = 16
     n_epochs: int = 100
-    n_train: int = 50
-    n_val: int = 10
+    n_train: int = 160
+    n_val: int = 80
     loss_eps: float = 1e-12      # Numerical floor in log-convergence loss
     grad_clip: float = 1.0       # max_norm for gradient clipping
 

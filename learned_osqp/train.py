@@ -111,6 +111,9 @@ def compute_feature_stats(
             x = torch.zeros(B, n, dtype=dtype, device=device)
             z = torch.zeros(B, m, dtype=dtype, device=device)
             y = torch.zeros(B, m, dtype=dtype, device=device)
+            x_prev =torch.zeros(B, n, dtype=dtype, device=device)
+            z_prev = torch.zeros(B, m, dtype=dtype, device=device)
+            y_prev = torch.zeros(B, m, dtype=dtype, device=device)
             alpha_z = torch.full((B, m), 1.6, dtype=dtype, device=device)
             rho_scalar_vec = torch.full((B,), cfg.rho, dtype=dtype, device=device)
 
@@ -118,8 +121,6 @@ def compute_feature_stats(
             alpha_stats = torch.full((B,), 1.6, dtype=dtype, device=device)
 
             for _ in range(n_stages):
-                x_prev, z_prev, y_prev = x.clone(), z.clone(), y.clone()
-
                 if scalar_mode:
                     feat = compute_global_features(
                         P, q, A, x, z, y, rho_scalar_vec,
@@ -135,6 +136,8 @@ def compute_feature_stats(
                 feat_sum += flat.sum(0)
                 feat_sq  += (flat ** 2).sum(0)
                 count    += flat.shape[0]
+
+                x_prev, z_prev, y_prev = x.clone(), z.clone(), y.clone()
 
                 x, z, y = rollout_T_steps(
                     x, z, y, alpha_z, factors, batch, cfg,
@@ -827,11 +830,11 @@ if __name__ == '__main__':
                         help='Comma-separated size params matching --types, e.g. "20,10,3". '
                              'If omitted, --n is used for all types.')
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--batch', type=int, default=10)
+    parser.add_argument('--batch', type=int, default=16)
     parser.add_argument('--lr', type=float, default=5e-5)
     parser.add_argument('--T', type=int, default=10, help='steps per stage')
     parser.add_argument('--stages', type=int, default=2000, help='max stages')
-    parser.add_argument('--n_train', type=int, default=50)
+    parser.add_argument('--n_train', type=int, default=160)
     parser.add_argument('--regen', action='store_true', help='regenerate dataset(s)')
     parser.add_argument('--loss', type=str, default='log_convergence',
                         choices=['log_convergence', 'spectral_radius', 'scaled_residual'],
@@ -894,7 +897,7 @@ if __name__ == '__main__':
         qp_types=types_list,
         qp_type_sizes=qp_type_sizes,
         # data_dir='learned_osqp/data',
-        data_dir='/data/engs-goulart/sedm7756/float64_optimized',
+        data_dir='/data/engs-goulart/sedm7756/0319_feat_pri_dua_res_scaled_alpha_1.25_1.95',
     )
 
     if args.regen:
@@ -907,8 +910,8 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}_loss={args.loss}"
-        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_1111.pt"
-        ckpt_path = f"learned_osqp/checkpoints/0318_feat_pri_dua_res_scaled_alpha_1.3_1.9/{ckpt_name}.pt"
+        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_debug.pt"
+        ckpt_path = f"learned_osqp/checkpoints/0319_feat_pri_dua_res_scaled_alpha_1.25_1.95/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)
