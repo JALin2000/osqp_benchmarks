@@ -10,7 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=384G                       # 384 GB memory per array task
-#SBATCH --array=1-10                    
+#SBATCH --array=1-12                    
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -37,6 +37,9 @@ CMDS=(
 
   "python learned_osqp/train.py --device cuda --precision low --types portfolio --sizes 20 --normalize_features --alpha_mode scalar"
   "python learned_osqp/train.py --device cuda --precision low --types portfolio --sizes 20 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
+  "python learned_osqp/train_control_fixed.py --device cuda --precision low --nx 100 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train_control_fixed.py --device cuda --precision low --nx 100 --adaptive_rho false --normalize_features --alpha_mode scalar"
 )
 
 # compute zero-based index for the bash array
