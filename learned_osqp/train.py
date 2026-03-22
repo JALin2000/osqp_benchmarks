@@ -910,8 +910,8 @@ if __name__ == '__main__':
 
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}_loss={args.loss}"
-        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_debug.pt"
-        ckpt_path = f"learned_osqp/checkpoints/0319_feat_pri_dua_res_scaled_alpha_1.25_1.95/{ckpt_name}.pt"
+        # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_loss_change_regularized.pt"
+        ckpt_path = f"learned_osqp/checkpoints/0322_feat_pri_dua_res_scaled_alpha_1.25_1.95_loss_softplus/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)

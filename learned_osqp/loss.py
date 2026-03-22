@@ -94,16 +94,16 @@ def log_convergence_loss(
 
 
 
-    ### 3. log_convergence_add_sqrt ###
-    # Numerator: depends on x_new (gradients flow here)
-    err_new = torch.norm(x_new - x_star.detach(), dim=1) ** 2 + torch.norm(y_new - y_star.detach(), dim=1) ** 2  # (B,)
-    num = err_new + eps
+    # ### 3. log_convergence_add_sqrt ###
+    # # Numerator: depends on x_new (gradients flow here)
+    # err_new = torch.norm(x_new - x_star.detach(), dim=1) ** 2 + torch.norm(y_new - y_star.detach(), dim=1) ** 2  # (B,)
+    # num = err_new + eps
 
-    # Denominator: fully detached
-    err_prev = torch.norm(x_prev.detach() - x_star.detach(), dim=1) ** 2 + torch.norm(y_prev.detach() - y_star.detach(), dim=1) ** 2  # (B,)
-    denom = (err_prev + eps).detach()
+    # # Denominator: fully detached
+    # err_prev = torch.norm(x_prev.detach() - x_star.detach(), dim=1) ** 2 + torch.norm(y_prev.detach() - y_star.detach(), dim=1) ** 2  # (B,)
+    # denom = (err_prev + eps).detach()
 
-    ratio_log = torch.log(torch.sqrt(num / denom))   # (B,)  negative = improvement
+    # ratio_log = torch.log(torch.sqrt(num / denom))   # (B,)  negative = improvement
 
 
 
@@ -117,6 +117,23 @@ def log_convergence_loss(
     # denom = (err_prev + eps).detach()
 
     # ratio_log = torch.log(torch.sqrt(num / denom))   # (B,)  negative = improvement
+
+
+
+    ### 5. clamped_log_convergence_add_sqrt ###
+    # Same contraction metric as #3, but the loss is clamped via softplus so that
+    # once contraction is "good enough" (ratio < exp(-delta)), the gradient → 0.
+    # This prevents alpha drift to the upper bound from chasing marginal gains.
+    delta = 0.5  # cap: no additional reward beyond ~exp(-0.5)≈0.6 contraction ratio
+
+    err_new = torch.norm(x_new - x_star.detach(), dim=1) ** 2 + torch.norm(y_new - y_star.detach(), dim=1) ** 2  # (B,)
+    num = err_new + eps
+
+    err_prev = torch.norm(x_prev.detach() - x_star.detach(), dim=1) ** 2 + torch.norm(y_prev.detach() - y_star.detach(), dim=1) ** 2  # (B,)
+    denom = (err_prev + eps).detach()
+
+    log_ratio = torch.log(torch.sqrt(num / denom))   # (B,)  negative = improvement
+    ratio_log = torch.nn.functional.softplus(log_ratio + delta) - delta  # (B,)  clamped
 
     if mask is not None:
         mask_f = mask.float()   # (B,)
