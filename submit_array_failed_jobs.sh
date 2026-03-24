@@ -5,12 +5,11 @@
 #SBATCH --error=slurm-%A_%a.err
 #SBATCH --time=48:00:00                # walltime (adjust as needed)
 #SBATCH --partition=medium            # change to your CPU partition name
-#SBATCH --gres=gpu:1
-#SBATCH --constraint='gpu_mem:64GB'
+#SBATCH --gres=gpu:1 --constraint='gpu_mem:64GB'
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G                       # 32 GB memory per array task
+#SBATCH --mem=64G                       # 32 GB memory per array task
 #SBATCH --array=1-5                    
 
 # ---- environment setup ----
