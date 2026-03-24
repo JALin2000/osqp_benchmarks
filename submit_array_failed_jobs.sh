@@ -10,7 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G                       # 32 GB memory per array task
-#SBATCH --array=1-5                    
+#SBATCH --array=1-11                    
 
 # ---- environment setup ----
 # Make sure conda is available in batch jobs
@@ -29,9 +29,17 @@ CMDS=(
 
   "python learned_osqp/train.py --batch 10 --device cuda --model_type gru --precision low --types control --sizes 100 --adaptive_rho false --normalize_features"
 
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --model_type gru --precision low --nx 100 --normalize_features"
   "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --model_type gru --precision low --nx 100 --adaptive_rho false --normalize_features"
 
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --precision low --nx 100 --normalize_features"
   "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --precision low --nx 100 --adaptive_rho false --normalize_features"
+
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --model_type gru --precision low --nx 100 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --model_type gru --precision low --nx 100 --adaptive_rho false --normalize_features --alpha_mode scalar"
+
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --precision low --nx 100 --normalize_features --alpha_mode scalar"
+  "python learned_osqp/train_control_fixed.py --batch 10 --device cuda --precision low --nx 100 --adaptive_rho false --normalize_features --alpha_mode scalar"
 )
 
 # compute zero-based index for the bash array

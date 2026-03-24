@@ -188,7 +188,7 @@ def main():
             f"_loss={args.loss}"
         )
         # ckpt_path = Path(f"learned_osqp/checkpoints/{ckpt_name}.pt")
-        ckpt_path = Path(f"learned_osqp/checkpoints/0319_feat_pri_dua_res_scaled_alpha_1.25_1.95/{ckpt_name}.pt")
+        ckpt_path = Path(f"learned_osqp/checkpoints/0324_failed_feat_unscaled_alpha_1.25_1.95_loss_softplus/{ckpt_name}.pt")
     else:
         ckpt_path = Path(args.ckpt)
 
