@@ -13,4 +13,4 @@ Modules:
 """
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet
+from learned_osqp.model import PerRowAlphaNet, PerRowGRUNet

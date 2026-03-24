@@ -1,15 +1,23 @@
 '''
 Test neural OSQP vs baseline on all QP types.
 
-For each QP type, compares 8 solver configs:
-  1. OSQP_python with adaptive_rho
-  2. OSQP_python without adaptive_rho
-  3. Neural scalar + arho (best_iter checkpoint)
-  4. Neural scalar + arho (best_rho checkpoint)
-  5. Neural vector + arho (best_iter checkpoint)
-  6. Neural vector + arho (best_rho checkpoint)
-  7. Neural scalar + no_arho (best_iter only — best_rho same when no rho updates)
-  8. Neural vector + no_arho (best_iter only)
+For each QP type, compares 14 solver configs:
+  1.  OSQP_python with adaptive_rho
+  2.  OSQP_python without adaptive_rho
+  --- MLP ---
+  3.  Neural mlp scalar + arho (best_iter checkpoint)
+  4.  Neural mlp scalar + arho (best_rho checkpoint)
+  5.  Neural mlp vector + arho (best_iter checkpoint)
+  6.  Neural mlp vector + arho (best_rho checkpoint)
+  7.  Neural mlp scalar + no_arho (best_iter only)
+  8.  Neural mlp vector + no_arho (best_iter only)
+  --- GRU ---
+  9.  Neural gru scalar + arho (best_iter checkpoint)
+  10. Neural gru scalar + arho (best_rho checkpoint)
+  11. Neural gru vector + arho (best_iter checkpoint)
+  12. Neural gru vector + arho (best_rho checkpoint)
+  13. Neural gru scalar + no_arho (best_iter only)
+  14. Neural gru vector + no_arho (best_iter only)
 '''
 
 import os
@@ -72,22 +80,22 @@ problems = [
 #     'Control': gen_int_log_space(40, 160, n_dim),
 # }
 
-# problem_dimensions = {
-#     'Random QP': gen_int_log_space(500, 500, n_dim),
-#     'Portfolio': gen_int_log_space(50, 100, n_dim),
-#     'Lasso': gen_int_log_space(50, 100, n_dim),
-#     'SVM': gen_int_log_space(50, 100, n_dim),
-#     'Control': gen_int_log_space(200, 200, n_dim),
-# }
+problem_dimensions = {
+    'Random QP': gen_int_log_space(500, 500, n_dim),
+    'Portfolio': gen_int_log_space(50, 100, n_dim),
+    'Lasso': gen_int_log_space(50, 100, n_dim),
+    'SVM': gen_int_log_space(50, 100, n_dim),
+    'Control': gen_int_log_space(200, 200, n_dim),
+}
 
 # for plotting
-problem_dimensions = {
-    'Random QP': gen_int_log_space(500, 10, 1),
-    'Portfolio': gen_int_log_space(100, 10, 1),
-    'Lasso': gen_int_log_space(100, 10, 1),
-    'SVM': gen_int_log_space(100, 10, 1),
-    'Control': gen_int_log_space(300, 10, 1),
-}
+# problem_dimensions = {
+#     'Random QP': gen_int_log_space(500, 10, 1),
+#     'Portfolio': gen_int_log_space(100, 10, 1),
+#     'Lasso': gen_int_log_space(100, 10, 1),
+#     'SVM': gen_int_log_space(100, 10, 1),
+#     'Control': gen_int_log_space(300, 10, 1),
+# }
 
 problem_parallel = {p: parallel for p in problems}
 
@@ -100,7 +108,7 @@ QP_TYPE_MAP = {
     'Control': 'control',
 }
 
-CHECKPOINT_DIR = os.path.join('learned_osqp', 'checkpoints_arc', 'float64_optimized')
+CHECKPOINT_DIR = os.path.join('learned_osqp', 'checkpoints_arc', '0319_feat_pri_dua_res_scaled_alpha_1.25_1.95')
 
 # --------------------------------------------------------------------------- #
 # Shared OSQP settings
@@ -130,41 +138,65 @@ def _make_settings(adaptive_rho: bool) -> dict:
 precision = 'high' if high_accuracy else 'low'
 
 
+def _ckpt_path(qp_key: str, arho: bool, alpha_mode: str, model_type: str,
+               ckpt_type: str) -> str:
+    """Build checkpoint path with backward-compatible fallback.
+
+    New naming: ..._model_type={model_type}_loss=log_convergence[_best_rho].pt
+    Old naming (mlp only): ...alpha_mode={alpha_mode}[_best_rho].pt
+    """
+    suffix = '_best_rho.pt' if ckpt_type == 'best_rho' else '.pt'
+    # New naming (includes model_type and loss)
+    new_base = (f'best_model_{qp_key}_precision={precision}'
+                f'_adaptive_rho={arho}'
+                f'_alpha_mode={alpha_mode}'
+                f'_model_type={model_type}'
+                f'_loss=log_convergence')
+    new_path = os.path.join(CHECKPOINT_DIR, new_base + suffix)
+    if os.path.exists(new_path):
+        return new_path
+    # Old naming fallback (no model_type / loss fields, mlp only)
+    old_base = (f'best_model_{qp_key}_precision={precision}'
+                f'_adaptive_rho={arho}'
+                f'_alpha_mode={alpha_mode}')
+    old_path = os.path.join(CHECKPOINT_DIR, old_base + suffix)
+    return old_path
+
+
 def _register_cross_neural_solvers(qp_key: str) -> list:
     """
     Register cross-test neural solvers where ckpt_arho != osqp_arho.
 
-    Naming: OSQP_python_neural_{alpha_mode}_{ckpt_arho_s}_ckpt_{osqp_arho_s}_osqp_{ckpt_type}
-      e.g.  OSQP_python_neural_scalar_arho_ckpt_noarho_osqp_best_iter
+    Naming: OSQP_python_neural_{model_type}_{alpha_mode}_{ckpt_arho_s}_ckpt_{osqp_arho_s}_osqp_{ckpt_type}
+      e.g.  OSQP_python_neural_mlp_scalar_arho_ckpt_noarho_osqp_best_iter
             (checkpoint trained with arho, running OSQP without arho)
 
     Returns list of added solver names.
     """
     names = []
-    for alpha_mode in ['scalar', 'vector']:
-        for ckpt_arho in [True, False]:
-            ckpt_arho_s = 'arho' if ckpt_arho else 'noarho'
-            osqp_arho = not ckpt_arho  # cross: opposite of ckpt
-            osqp_arho_s = 'arho' if osqp_arho else 'noarho'
-            ckpt_types = ['best_iter', 'best_rho'] if ckpt_arho else ['best_iter']
-            for ckpt_type in ckpt_types:
-                ckpt_base = (f'best_model_{qp_key}_precision={precision}'
-                             f'_adaptive_rho={ckpt_arho}'
-                             f'_alpha_mode={alpha_mode}')
-                ckpt_file = ckpt_base + ('_best_rho.pt' if ckpt_type == 'best_rho' else '.pt')
-                ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt_file)
+    for model_type in ['mlp', 'gru']:
+        for alpha_mode in ['scalar', 'vector']:
+            for ckpt_arho in [True, False]:
+                ckpt_arho_s = 'arho' if ckpt_arho else 'noarho'
+                osqp_arho = not ckpt_arho  # cross: opposite of ckpt
+                osqp_arho_s = 'arho' if osqp_arho else 'noarho'
+                ckpt_types = ['best_iter', 'best_rho'] if ckpt_arho else ['best_iter']
+                for ckpt_type in ckpt_types:
+                    ckpt_path = _ckpt_path(qp_key, ckpt_arho, alpha_mode,
+                                           model_type, ckpt_type)
 
-                name = (f'OSQP_python_neural_{alpha_mode}'
-                        f'_{ckpt_arho_s}_ckpt_{osqp_arho_s}_osqp'
-                        f'_{ckpt_type}')
-                s.SOLVER_MAP[name] = partial(
-                    NeuralOSQPSolver,
-                    checkpoint_path=ckpt_path,
-                    alpha_mode=alpha_mode,
-                    record_history=(alpha_mode == 'scalar'),
-                )
-                s.settings[name] = _make_settings(adaptive_rho=osqp_arho)
-                names.append(name)
+                    name = (f'OSQP_python_neural_{model_type}_{alpha_mode}'
+                            f'_{ckpt_arho_s}_ckpt_{osqp_arho_s}_osqp'
+                            f'_{ckpt_type}')
+                    s.SOLVER_MAP[name] = partial(
+                        NeuralOSQPSolver,
+                        checkpoint_path=ckpt_path,
+                        alpha_mode=alpha_mode,
+                        model_type=model_type,
+                        record_history=False,
+                    )
+                    s.settings[name] = _make_settings(adaptive_rho=osqp_arho)
+                    names.append(name)
     return names
 
 
@@ -187,35 +219,30 @@ for problem in problems:
     s.settings[name] = _make_settings(adaptive_rho=False)
     solver_names.append(name)
 
-    # ---- 3-8. Neural variants ----
-    for arho in [True, False]:
-        arho_str = 'arho' if arho else 'no_arho'
-        # With adaptive_rho: test both best_iter and best_rho checkpoints
-        # Without adaptive_rho: best_rho is same as best_iter (0 rho updates), skip it
-        ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
+    # ---- 3-14. Neural variants (mlp + gru) ----
+    for model_type in ['mlp', 'gru']:
+        for arho in [True, False]:
+            arho_str = 'arho' if arho else 'no_arho'
+            # With adaptive_rho: test both best_iter and best_rho checkpoints
+            # Without adaptive_rho: best_rho is same as best_iter (0 rho updates), skip it
+            ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
 
-        for alpha_mode in ['scalar', 'vector']:
-            for ckpt_type in ckpt_types:
-                # Build checkpoint path
-                ckpt_base = (f'best_model_{qp_key}_precision={precision}'
-                             f'_adaptive_rho={arho}'
-                             f'_alpha_mode={alpha_mode}')
-                if ckpt_type == 'best_rho':
-                    ckpt_file = ckpt_base + '_best_rho.pt'
-                else:
-                    ckpt_file = ckpt_base + '.pt'
-                ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt_file)
+            for alpha_mode in ['scalar', 'vector']:
+                for ckpt_type in ckpt_types:
+                    ckpt_path = _ckpt_path(qp_key, arho, alpha_mode,
+                                           model_type, ckpt_type)
 
-                # Solver name must start with 'OSQP_python' for example.py branch
-                name = f'OSQP_python_neural_{alpha_mode}_{arho_str}_{ckpt_type}'
-                s.SOLVER_MAP[name] = partial(
-                    NeuralOSQPSolver,
-                    checkpoint_path=ckpt_path,
-                    alpha_mode=alpha_mode,
-                    record_history=(alpha_mode == 'scalar'),
-                )
-                s.settings[name] = _make_settings(adaptive_rho=arho)
-                solver_names.append(name)
+                    # Solver name must start with 'OSQP_python' for example.py branch
+                    name = f'OSQP_python_neural_{model_type}_{alpha_mode}_{arho_str}_{ckpt_type}'
+                    s.SOLVER_MAP[name] = partial(
+                        NeuralOSQPSolver,
+                        checkpoint_path=ckpt_path,
+                        alpha_mode=alpha_mode,
+                        model_type=model_type,
+                        record_history=False,
+                    )
+                    s.settings[name] = _make_settings(adaptive_rho=arho)
+                    solver_names.append(name)
 
     # ---- Cross-test: ckpt_arho != osqp_arho ----
     solver_names += _register_cross_neural_solvers(qp_key)
@@ -224,7 +251,7 @@ for problem in problems:
         for name in solver_names:
             s.settings[name]['verbose'] = True
 
-    OUTPUT_FOLDER = f'0318_neural_comparison_{qp_key}_solver_alpha_plot'
+    OUTPUT_FOLDER = f'0319_neural_comparison_{qp_key}_solver'
 
     print("\n" + "=" * 80)
     print(f"Testing {problem} — {len(solver_names)} solver configs")
@@ -267,7 +294,7 @@ print("\n" + "=" * 80)
 print("Testing SuitesparseLasso with lasso neural solvers")
 print("=" * 80 + "\n")
 
-SS_OUTPUT_FOLDER = f'0318_neural_comparison_suitesparse_lasso_solver_alpha_plot'
+SS_OUTPUT_FOLDER = f'0319_neural_comparison_suitesparse_lasso_solver'
 ss_solver_names = []
 
 # ---- 1. OSQP_python with adaptive_rho ----
@@ -282,30 +309,26 @@ s.SOLVER_MAP[name] = OSQPPythonSolver
 s.settings[name] = _make_settings(adaptive_rho=False)
 ss_solver_names.append(name)
 
-# ---- 3-8. Neural variants (lasso checkpoints) ----
-for arho in [True, False]:
-    arho_str = 'arho' if arho else 'no_arho'
-    ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
+# ---- 3-14. Neural variants (lasso checkpoints, mlp + gru) ----
+for model_type in ['mlp', 'gru']:
+    for arho in [True, False]:
+        arho_str = 'arho' if arho else 'no_arho'
+        ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
 
-    for alpha_mode in ['scalar', 'vector']:
-        for ckpt_type in ckpt_types:
-            ckpt_base = (f'best_model_lasso_precision={precision}'
-                         f'_adaptive_rho={arho}'
-                         f'_alpha_mode={alpha_mode}')
-            if ckpt_type == 'best_rho':
-                ckpt_file = ckpt_base + '_best_rho.pt'
-            else:
-                ckpt_file = ckpt_base + '.pt'
-            ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt_file)
+        for alpha_mode in ['scalar', 'vector']:
+            for ckpt_type in ckpt_types:
+                ckpt_path = _ckpt_path('lasso', arho, alpha_mode,
+                                       model_type, ckpt_type)
 
-            name = f'OSQP_python_neural_{alpha_mode}_{arho_str}_{ckpt_type}'
-            s.SOLVER_MAP[name] = partial(
-                NeuralOSQPSolver,
-                checkpoint_path=ckpt_path,
-                alpha_mode=alpha_mode,
-            )
-            s.settings[name] = _make_settings(adaptive_rho=arho)
-            ss_solver_names.append(name)
+                name = f'OSQP_python_neural_{model_type}_{alpha_mode}_{arho_str}_{ckpt_type}'
+                s.SOLVER_MAP[name] = partial(
+                    NeuralOSQPSolver,
+                    checkpoint_path=ckpt_path,
+                    alpha_mode=alpha_mode,
+                    model_type=model_type,
+                )
+                s.settings[name] = _make_settings(adaptive_rho=arho)
+                ss_solver_names.append(name)
 
 # ---- Cross-test: ckpt_arho != osqp_arho ----
 ss_solver_names += _register_cross_neural_solvers('lasso')
@@ -349,7 +372,7 @@ print("\n" + "=" * 80)
 print("Testing Maros-Meszaros with control neural solvers")
 print("=" * 80 + "\n")
 
-MM_OUTPUT_FOLDER = f'0318_neural_comparison_maros_meszaros_solver_alpha_plot'
+MM_OUTPUT_FOLDER = f'0319_neural_comparison_maros_meszaros_solver'
 mm_solver_names = []
 
 # ---- 1. OSQP_python with adaptive_rho ----
@@ -364,30 +387,26 @@ s.SOLVER_MAP[name] = OSQPPythonSolver
 s.settings[name] = _make_settings(adaptive_rho=False)
 mm_solver_names.append(name)
 
-# ---- 3-8. Neural variants (control checkpoints) ----
-for arho in [True, False]:
-    arho_str = 'arho' if arho else 'no_arho'
-    ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
+# ---- 3-14. Neural variants (control checkpoints, mlp + gru) ----
+for model_type in ['mlp', 'gru']:
+    for arho in [True, False]:
+        arho_str = 'arho' if arho else 'no_arho'
+        ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
 
-    for alpha_mode in ['scalar', 'vector']:
-        for ckpt_type in ckpt_types:
-            ckpt_base = (f'best_model_control_precision={precision}'
-                         f'_adaptive_rho={arho}'
-                         f'_alpha_mode={alpha_mode}')
-            if ckpt_type == 'best_rho':
-                ckpt_file = ckpt_base + '_best_rho.pt'
-            else:
-                ckpt_file = ckpt_base + '.pt'
-            ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt_file)
+        for alpha_mode in ['scalar', 'vector']:
+            for ckpt_type in ckpt_types:
+                ckpt_path = _ckpt_path('control', arho, alpha_mode,
+                                       model_type, ckpt_type)
 
-            name = f'OSQP_python_neural_{alpha_mode}_{arho_str}_{ckpt_type}'
-            s.SOLVER_MAP[name] = partial(
-                NeuralOSQPSolver,
-                checkpoint_path=ckpt_path,
-                alpha_mode=alpha_mode,
-            )
-            s.settings[name] = _make_settings(adaptive_rho=arho)
-            mm_solver_names.append(name)
+                name = f'OSQP_python_neural_{model_type}_{alpha_mode}_{arho_str}_{ckpt_type}'
+                s.SOLVER_MAP[name] = partial(
+                    NeuralOSQPSolver,
+                    checkpoint_path=ckpt_path,
+                    alpha_mode=alpha_mode,
+                    model_type=model_type,
+                )
+                s.settings[name] = _make_settings(adaptive_rho=arho)
+                mm_solver_names.append(name)
 
 # ---- Cross-test: ckpt_arho != osqp_arho ----
 mm_solver_names += _register_cross_neural_solvers('control')

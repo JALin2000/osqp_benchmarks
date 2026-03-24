@@ -109,24 +109,24 @@ def compute_per_row_features(
 
     # ---- Scaled residuals (OSQP-style normalization) ----
     q_inf = torch.norm(q, p=float('inf'), dim=1)                         # (B,)
-    pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
-                                   torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
-    dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
-                     torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
-                                   q_inf)) + _EPS                         # (B,)
-    pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
-                                   torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
-    dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
-                     torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
-                                   q_inf)) + _EPS                         # (B,)
+    # pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
+    #                                torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
+    # dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
+    #                  torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
+    #                                q_inf)) + _EPS                         # (B,)
+    # pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
+    #                                torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
+    # dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
+    #                  torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
+    #                                q_inf)) + _EPS                         # (B,)
 
     # Scaled versions — pri_scale is (B,), broadcast to (B, m) for per-row features
-    abs_pri_res_vec_scaled      = abs_pri_res_vec      / pri_scale.unsqueeze(1)       # (B, m)
-    abs_pri_res_vec_prev_scaled = abs_pri_res_vec_prev / pri_scale_prev.unsqueeze(1)  # (B, m)
-    pri_res_inf_norm_scaled      = pri_res_inf_norm      / pri_scale       # (B,)
-    dua_res_inf_norm_scaled      = dua_res_inf_norm      / dua_scale       # (B,)
-    pri_res_inf_norm_prev_scaled = pri_res_inf_norm_prev / pri_scale_prev  # (B,)
-    dua_res_inf_norm_prev_scaled = dua_res_inf_norm_prev / dua_scale_prev  # (B,)
+    # abs_pri_res_vec_scaled      = abs_pri_res_vec      / pri_scale.unsqueeze(1)       # (B, m)
+    # abs_pri_res_vec_prev_scaled = abs_pri_res_vec_prev / pri_scale_prev.unsqueeze(1)  # (B, m)
+    # pri_res_inf_norm_scaled      = pri_res_inf_norm      / pri_scale       # (B,)
+    # dua_res_inf_norm_scaled      = dua_res_inf_norm      / dua_scale       # (B,)
+    # pri_res_inf_norm_prev_scaled = pri_res_inf_norm_prev / pri_scale_prev  # (B,)
+    # dua_res_inf_norm_prev_scaled = dua_res_inf_norm_prev / dua_scale_prev  # (B,)
 
 
     # ---- Stack all features along the last dimension ----
@@ -147,24 +147,24 @@ def compute_per_row_features(
     features = torch.stack([
         torch.log10(torch.clamp(lower_dist, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[0] log distance to lower bound
         torch.log10(torch.clamp(upper_dist, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[1] log distance to upper bound
-        # torch.log10(torch.clamp(abs_pri_res_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log absolute primal residual (unscaled)
-        torch.log10(torch.clamp(abs_pri_res_vec_scaled, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log scaled absolute primal residual
+        torch.log10(torch.clamp(abs_pri_res_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log absolute primal residual (unscaled)
+        # torch.log10(torch.clamp(abs_pri_res_vec_scaled, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[2] log scaled absolute primal residual
         sign_pri_res_vec,  # f[3] sign of primal residual
         torch.log10(torch.clamp(abs_y, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[4] log absolute dual variable
-        # torch.log10(torch.clamp(pri_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log infinity norm of primal residual (unscaled)
-        # torch.log10(torch.clamp(dua_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log infinity norm of dual residual (unscaled)
-        torch.log10(torch.clamp(pri_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log scaled infinity norm of primal residual
-        torch.log10(torch.clamp(dua_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log scaled infinity norm of dual residual
+        torch.log10(torch.clamp(pri_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log infinity norm of primal residual (unscaled)
+        torch.log10(torch.clamp(dua_res_inf_norm.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log infinity norm of dual residual (unscaled)
+        # torch.log10(torch.clamp(pri_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[5] log scaled infinity norm of primal residual
+        # torch.log10(torch.clamp(dua_res_inf_norm_scaled.unsqueeze(1).expand(-1, m), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[6] log scaled infinity norm of dual residual
         torch.log10(torch.clamp(rho_vec, _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[7] log of penalty parameter
         A_inf_norm,  # f[8]
-        # torch.log10(torch.clamp(abs_pri_res_vec / (abs_pri_res_vec_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] ratio of current to previous primal residual (elementwise, unscaled)
-        torch.log10(torch.clamp(abs_pri_res_vec_scaled / (abs_pri_res_vec_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] scaled ratio of current to previous primal residual (elementwise)
-        # torch.log10(torch.clamp(pri_res_inf_norm / (pri_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] ratio of current to previous primal residual (inf norm, unscaled)
-        # torch.log10(torch.clamp(dua_res_inf_norm / (dua_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] ratio of current to previous dual residual (inf norm, unscaled)
-        torch.log10(torch.clamp(pri_res_inf_norm_scaled / (pri_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] scaled ratio of current to previous primal residual (inf norm)
-        torch.log10(torch.clamp(dua_res_inf_norm_scaled / (dua_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] scaled ratio of current to previous dual residual (inf norm)
-        # torch.log10(torch.clamp(pri_res_inf_norm / (dua_res_inf_norm + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log primal/dual imbalance (unscaled)
-        torch.log10(torch.clamp(pri_res_inf_norm_scaled / (dua_res_inf_norm_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log scaled primal/dual imbalance
+        torch.log10(torch.clamp(abs_pri_res_vec / (abs_pri_res_vec_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] ratio of current to previous primal residual (elementwise, unscaled)
+        # torch.log10(torch.clamp(abs_pri_res_vec_scaled / (abs_pri_res_vec_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)),  # f[9] scaled ratio of current to previous primal residual (elementwise)
+        torch.log10(torch.clamp(pri_res_inf_norm / (pri_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] ratio of current to previous primal residual (inf norm, unscaled)
+        torch.log10(torch.clamp(dua_res_inf_norm / (dua_res_inf_norm_prev + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] ratio of current to previous dual residual (inf norm, unscaled)
+        # torch.log10(torch.clamp(pri_res_inf_norm_scaled / (pri_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[10] scaled ratio of current to previous primal residual (inf norm)
+        # torch.log10(torch.clamp(dua_res_inf_norm_scaled / (dua_res_inf_norm_prev_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[11] scaled ratio of current to previous dual residual (inf norm)
+        torch.log10(torch.clamp(pri_res_inf_norm / (dua_res_inf_norm + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log primal/dual imbalance (unscaled)
+        # torch.log10(torch.clamp(pri_res_inf_norm_scaled / (dua_res_inf_norm_scaled + _EPS), _LOG_LOWER_BOUND_CLAMP, _LOG_UPPER_BOUND_CLAMP)).unsqueeze(1).expand(-1, m),  # f[12] log scaled primal/dual imbalance
     ], dim=-1)  # (B, m, 13)
 
     return features
@@ -226,34 +226,34 @@ def compute_global_features(
 
     # ---- Scaled residuals (OSQP-style normalization) ----
     # Scaling denominators reuse already-computed tensors — negligible overhead.
-    q_inf = torch.norm(q, p=float('inf'), dim=1)                       # (B,)
-    pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
-                                   torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
-    dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
-                     torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
-                                   q_inf)) + _EPS                       # (B,)
-    pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
-                                   torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
-    dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
-                     torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
-                                   q_inf)) + _EPS                       # (B,)
+    # q_inf = torch.norm(q, p=float('inf'), dim=1)                       # (B,)
+    # pri_scale      = torch.maximum(torch.norm(Ax,      p=float('inf'), dim=1),
+    #                                torch.norm(z,       p=float('inf'), dim=1)) + _EPS  # (B,)
+    # dua_scale      = torch.maximum(torch.norm(Px,      p=float('inf'), dim=1),
+    #                  torch.maximum(torch.norm(ATy,     p=float('inf'), dim=1),
+    #                                q_inf)) + _EPS                       # (B,)
+    # pri_scale_prev = torch.maximum(torch.norm(Ax_prev, p=float('inf'), dim=1),
+    #                                torch.norm(z_prev,  p=float('inf'), dim=1)) + _EPS  # (B,)
+    # dua_scale_prev = torch.maximum(torch.norm(Px_prev, p=float('inf'), dim=1),
+    #                  torch.maximum(torch.norm(ATy_prev,p=float('inf'), dim=1),
+    #                                q_inf)) + _EPS                       # (B,)
 
-    pri_res_inf_scaled      = pri_res_inf      / pri_scale       # (B,)
-    dua_res_inf_scaled      = dua_res_inf      / dua_scale       # (B,)
-    pri_res_inf_prev_scaled = pri_res_inf_prev / pri_scale_prev  # (B,)
-    dua_res_inf_prev_scaled = dua_res_inf_prev / dua_scale_prev  # (B,)
+    # pri_res_inf_scaled      = pri_res_inf      / pri_scale       # (B,)
+    # dua_res_inf_scaled      = dua_res_inf      / dua_scale       # (B,)
+    # pri_res_inf_prev_scaled = pri_res_inf_prev / pri_scale_prev  # (B,)
+    # dua_res_inf_prev_scaled = dua_res_inf_prev / dua_scale_prev  # (B,)
 
     return torch.stack([
-        # _log10c(pri_res_inf),                                        # f[0] (unscaled)
-        # _log10c(dua_res_inf),                                        # f[1] (unscaled)
-        _log10c(pri_res_inf_scaled),                                   # f[0] scaled primal residual
-        _log10c(dua_res_inf_scaled),                                   # f[1] scaled dual residual
+        _log10c(pri_res_inf),                                        # f[0] (unscaled)
+        _log10c(dua_res_inf),                                        # f[1] (unscaled)
+        # _log10c(pri_res_inf_scaled),                                   # f[0] scaled primal residual
+        # _log10c(dua_res_inf_scaled),                                   # f[1] scaled dual residual
         _log10c(rho_scalar),                                           # f[2]
-        # _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),            # f[3] (unscaled ratio)
-        # _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),            # f[4] (unscaled ratio)
-        _log10c(pri_res_inf_scaled / (pri_res_inf_prev_scaled + _EPS)),  # f[3] scaled primal ratio
-        _log10c(dua_res_inf_scaled / (dua_res_inf_prev_scaled + _EPS)),  # f[4] scaled dual ratio
-        # _log10c(pri_res_inf / (dua_res_inf + _EPS)),                 # f[5] (unscaled imbalance)
-        _log10c(pri_res_inf_scaled / (dua_res_inf_scaled + _EPS)),     # f[5] scaled primal/dual imbalance
+        _log10c(pri_res_inf / (pri_res_inf_prev + _EPS)),            # f[3] (unscaled ratio)
+        _log10c(dua_res_inf / (dua_res_inf_prev + _EPS)),            # f[4] (unscaled ratio)
+        # _log10c(pri_res_inf_scaled / (pri_res_inf_prev_scaled + _EPS)),  # f[3] scaled primal ratio
+        # _log10c(dua_res_inf_scaled / (dua_res_inf_prev_scaled + _EPS)),  # f[4] scaled dual ratio
+        _log10c(pri_res_inf / (dua_res_inf + _EPS)),                 # f[5] (unscaled imbalance)
+        # _log10c(pri_res_inf_scaled / (dua_res_inf_scaled + _EPS)),     # f[5] scaled primal/dual imbalance
         # alpha,                                                        # (commented out) previous-stage alpha
     ], dim=-1)  # (B, 6)

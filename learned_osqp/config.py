@@ -94,7 +94,7 @@ class Config:
     #            predicted by ScalarAlphaNet from 7 global residual features
     alpha_mode: str = 'vector'
     scalar_feature_dim: int = 6   # dim of global features used by ScalarAlphaNet
-    model_type: str = 'mlp'       # 'mlp' or 'gru' (only applies when alpha_mode='scalar')
+    model_type: str = 'mlp'       # 'mlp' or 'gru' (applies to both scalar and vector alpha_mode)
 
     # ------------------------------------------------------------------ #
     # Dataset storage

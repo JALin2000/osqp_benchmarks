@@ -28,7 +28,7 @@ import torch
 
 from solvers.osqppurepy import OSQP as _OSQPInterface
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
+from learned_osqp.model import PerRowAlphaNet, PerRowGRUNet, ScalarAlphaNet, ScalarGRUNet
 
 # ------------------------------------------------------------------ #
 # Default checkpoint
@@ -54,12 +54,15 @@ def _log10s(s: float) -> float:
     return float(np.log10(np.clip(s, _LOG_LOWER, _LOG_UPPER)))
 
 
-def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet | ScalarAlphaNet | ScalarGRUNet:
-    """Load a PerRowAlphaNet, ScalarAlphaNet, or ScalarGRUNet from a .pt checkpoint."""
+def _load_model(checkpoint_path: str, cfg: Config) -> PerRowAlphaNet | PerRowGRUNet | ScalarAlphaNet | ScalarGRUNet:
+    """Load a PerRowAlphaNet, PerRowGRUNet, ScalarAlphaNet, or ScalarGRUNet from a .pt checkpoint."""
     alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
     model_type = getattr(cfg, 'model_type', 'mlp')
     if alpha_mode != 'scalar':
-        model = PerRowAlphaNet(cfg)
+        if model_type == 'gru':
+            model = PerRowGRUNet(cfg)
+        else:
+            model = PerRowAlphaNet(cfg)
     elif model_type == 'gru':
         model = ScalarGRUNet(cfg)
     else:
@@ -99,7 +102,7 @@ class NeuralAlphaCallback:
     Ratio features (f[9]-f[12]) use unscaled values directly (scale cancels).
     """
 
-    def __init__(self, work, model: PerRowAlphaNet, cfg: Config, T: int = 10):
+    def __init__(self, work, model: PerRowAlphaNet | PerRowGRUNet, cfg: Config, T: int = 10):
         self.work = work
         self.model = model
         self.cfg = cfg
@@ -109,6 +112,10 @@ class NeuralAlphaCallback:
 
         m = work.data.m
         self._m = m
+
+        # GRU hidden state — None means zeros (reset at start of each solve)
+        self._is_gru: bool = isinstance(model, PerRowGRUNet)
+        self._h: torch.Tensor | None = None  # (1, m, hidden_dim)
 
         # State T steps ago — unscaled residuals (for ratio features, scale cancels)
         self._pri_res_unscaled_prev: np.ndarray = np.zeros(m)   # E_inv*(Ax-z) prev
@@ -222,7 +229,10 @@ class NeuralAlphaCallback:
         feat_t  = torch.as_tensor(feat_np, dtype=self._torch_dtype).unsqueeze(0)  # (1, m, 13)
 
         with torch.no_grad():
-            alpha_z_t = self.model(feat_t)                                   # (1, m)
+            if self._is_gru:
+                alpha_z_t, self._h = self.model(feat_t, self._h)             # (1, m), (1, m, hidden)
+            else:
+                alpha_z_t = self.model(feat_t)                               # (1, m)
 
         # THEN update prev residuals for the next stage boundary
         work = self.work
@@ -410,10 +420,12 @@ class NeuralOSQPSolver:
         cfg: Config | None = None,
         T: int = 10,
         alpha_mode: str = 'vector',
+        model_type: str = 'mlp',
         record_history: bool = False,
     ):
         self._cfg = cfg or Config()
         self._cfg.alpha_mode = alpha_mode
+        self._cfg.model_type = model_type
         self._nn = _load_model(checkpoint_path, self._cfg)
         self._T = T
         self._alpha_mode = alpha_mode

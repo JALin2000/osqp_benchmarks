@@ -44,7 +44,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
+from learned_osqp.model import PerRowAlphaNet, PerRowGRUNet, ScalarAlphaNet, ScalarGRUNet
 import itertools
 import random
 from learned_osqp.data import make_dataloaders_multi, dataset_path
@@ -386,7 +386,10 @@ def train_epoch(
             else:
                 features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
                                                     x_prev, z_prev, y_prev, AT=AT)
-                alpha_z = model(features)   # (B, m)
+                if isinstance(model, PerRowGRUNet):
+                    alpha_z, h_state = model(features, h_state)  # (B, m), (B, m, hidden)
+                else:
+                    alpha_z = model(features)   # (B, m)
                 alpha_x_override = None
                 alpha_scalar = None
 
@@ -590,7 +593,10 @@ def val_epoch(
             else:
                 features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
                                                     x_prev, z_prev, y_prev, AT=AT)
-                alpha_z = model(features)   # (B, m)
+                if isinstance(model, PerRowGRUNet):
+                    alpha_z, h_state = model(features, h_state)  # (B, m), (B, m, hidden)
+                else:
+                    alpha_z = model(features)   # (B, m)
                 alpha_x_override = None
                 alpha_scalar = None
 
@@ -695,7 +701,7 @@ def train(
     alpha_mode = getattr(cfg, 'alpha_mode', 'vector')
     model_type = getattr(cfg, 'model_type', 'mlp')
     if alpha_mode != 'scalar':
-        model_name = 'PerRowAlphaNet'
+        model_name = 'PerRowGRUNet' if model_type == 'gru' else 'PerRowAlphaNet'
     elif model_type == 'gru':
         model_name = 'ScalarGRUNet'
     else:
@@ -720,7 +726,10 @@ def train(
         else:
             model = ScalarAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     else:
-        model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+        if model_type == 'gru':
+            model = PerRowGRUNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+        else:
+            model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"  Model parameters: {n_params:,}")
 
@@ -911,7 +920,7 @@ if __name__ == '__main__':
     if args.ckpt is None:
         ckpt_name = f"best_model_{args.types}_precision={args.precision}_adaptive_rho={args.adaptive_rho}_alpha_mode={args.alpha_mode}_model_type={args.model_type}_loss={args.loss}"
         # ckpt_path = f"learned_osqp/checkpoints/{ckpt_name}_loss_change_regularized.pt"
-        ckpt_path = f"learned_osqp/checkpoints/0322_feat_pri_dua_res_scaled_alpha_1.25_1.95_loss_softplus/{ckpt_name}.pt"
+        ckpt_path = f"learned_osqp/checkpoints/0324_feat_unscaled_alpha_1.25_1.95_loss_softplus/{ckpt_name}.pt"
     else:
         ckpt_path = args.ckpt
     train(cfg, loss_type=args.loss, checkpoint_path=ckpt_path)

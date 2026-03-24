@@ -30,7 +30,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
+from learned_osqp.model import PerRowAlphaNet, PerRowGRUNet, ScalarAlphaNet, ScalarGRUNet
 from learned_osqp.data import make_dataloaders_multi
 from learned_osqp.features import compute_per_row_features, compute_global_features
 from learned_osqp.osqp_torch import (
@@ -48,7 +48,7 @@ from learned_osqp.loss import primal_residual, dual_residual
 
 @torch.no_grad()
 def learned_rollout(
-    model: PerRowAlphaNet | ScalarAlphaNet | ScalarGRUNet,
+    model: PerRowAlphaNet | PerRowGRUNet | ScalarAlphaNet | ScalarGRUNet,
     batch: dict,
     cfg: Config,
     T_total: int = 100,
@@ -116,7 +116,10 @@ def learned_rollout(
             else:
                 features = compute_per_row_features(P, q, A, l, u, x, z, y, rho_vec, x_star,
                                                     x_prev, z_prev, y_prev)
-                alpha_z = model(features)   # (B, m)
+                if isinstance(model, PerRowGRUNet):
+                    alpha_z, h_state = model(features, h_state)  # (B, m), (B, m, hidden)
+                else:
+                    alpha_z = model(features)   # (B, m)
                 alpha_x_cur = cfg.alpha_x
 
             # Save state at start of this stage; will become x_prev for the next stage
@@ -247,7 +250,10 @@ def evaluate(
         else:
             model = ScalarAlphaNet(cfg).to(dtype=dtype, device=device)
     else:
-        model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
+        if model_type == 'gru':
+            model = PerRowGRUNet(cfg).to(dtype=dtype, device=device)
+        else:
+            model = PerRowAlphaNet(cfg).to(dtype=dtype, device=device)
     model.load_state_dict(ckpt['model_state'])
     model.feat_norm_active = ckpt.get('feat_norm_active', False)
     model.eval()

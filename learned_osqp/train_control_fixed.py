@@ -32,7 +32,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from learned_osqp.config import Config
-from learned_osqp.model import PerRowAlphaNet, ScalarAlphaNet, ScalarGRUNet
+from learned_osqp.model import PerRowAlphaNet, PerRowGRUNet, ScalarAlphaNet, ScalarGRUNet
 from learned_osqp.data import (
     _build_instance_from_qp, QPDataset, collate_fn, dataset_path,
 )
@@ -200,6 +200,8 @@ def main():
         model_name = 'ScalarGRUNet'
     elif alpha_mode == 'scalar':
         model_name = 'ScalarAlphaNet'
+    elif model_type == 'gru':
+        model_name = 'PerRowGRUNet'
     else:
         model_name = 'PerRowAlphaNet'
     log.info(f"Training {model_name}  [loss={loss_type}, alpha_mode={alpha_mode}, model_type={model_type}]")
@@ -251,7 +253,10 @@ def main():
         else:
             model = ScalarAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     else:
-        model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+        if model_type == 'gru':
+            model = PerRowGRUNet(cfg).to(dtype=cfg.torch_dtype, device=device)
+        else:
+            model = PerRowAlphaNet(cfg).to(dtype=cfg.torch_dtype, device=device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"  Model parameters: {n_params:,}")
 

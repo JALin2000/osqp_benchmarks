@@ -136,6 +136,113 @@ class PerRowAlphaNet(nn.Module):
         return torch.full((B, m), 1.6, dtype=dtype, device=device)
 
 
+class PerRowGRUNet(nn.Module):
+    """
+    Per-row GRU mapping sequential per-row features → per-row alpha_z,
+    with memory across ADMM stages.
+
+    Combines the per-row equivariant structure of PerRowAlphaNet with the
+    temporal memory of ScalarGRUNet.  At each stage boundary the GRU cell
+    processes the current (B, m, feature_dim) feature tensor and updates a
+    (B, m, hidden_dim) hidden state carried between stages.
+
+    Input shape:  (B, m, feature_dim) per stage + (B, m, hidden_dim) h state
+    Output shape: (B, m) alpha, (B, m, hidden_dim) h_new
+
+    The GRU cell and all subsequent layers share weights across rows (dim m
+    is treated as batch), making the network row-equivariant.
+
+    Hidden state is carried between stages during a solve and reset to zeros
+    at the start of each new problem.  Gradients are detached between stages
+    (same convention as x/z/y).
+
+    Initialisation:
+      Output layer near-zero → sigmoid(0) = 0.5 → alpha ≈ 1.6 at epoch 0.
+    """
+
+    def __init__(self, cfg: 'Config'):
+        super().__init__()
+        self.cfg = cfg
+        in_dim = cfg.feature_dim
+
+        # Feature normalisation — same interface as PerRowAlphaNet
+        self.register_buffer('feat_mean', torch.zeros(in_dim))
+        self.register_buffer('feat_std',  torch.ones(in_dim))
+        self.feat_norm_active: bool = False
+
+        self.gru_cell    = nn.GRUCell(in_dim, cfg.hidden_dim)
+        self.post_gru    = nn.Sequential(
+            nn.Linear(cfg.hidden_dim, cfg.hidden_dim),
+            nn.ELU(),
+        )
+        self.output_layer = nn.Linear(cfg.hidden_dim, 1)
+
+        self._init_weights()
+
+    def set_feature_norm(self, mean: torch.Tensor, std: torch.Tensor) -> None:
+        """Same interface as PerRowAlphaNet.set_feature_norm."""
+        self.feat_mean.copy_(mean.to(device=self.feat_mean.device, dtype=self.feat_mean.dtype))
+        self.feat_std.copy_(std.to(device=self.feat_std.device,   dtype=self.feat_std.dtype))
+        self.feat_norm_active = True
+
+    def _init_weights(self) -> None:
+        # GRU: Xavier for input-to-hidden, orthogonal for hidden-to-hidden
+        for name, p in self.gru_cell.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(p)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(p)
+            elif 'bias' in name:
+                nn.init.zeros_(p)
+        # post_gru linear: Xavier init
+        for module in self.post_gru.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.5)
+                nn.init.zeros_(module.bias)
+        # Output layer: near-zero init → sigmoid(0) → alpha ≈ 1.6
+        nn.init.normal_(self.output_layer.weight, std=0.1)
+        nn.init.zeros_(self.output_layer.bias)
+
+    def forward(
+        self,
+        features: torch.Tensor,         # (B, m, feature_dim)
+        h: torch.Tensor | None = None,  # (B, m, hidden_dim)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            features : (B, m, feature_dim) — per-row features at current stage
+            h        : (B, m, hidden_dim) GRU hidden state; zeros if None (stage 0)
+
+        Returns:
+            alpha : (B, m)              in [cfg.alpha_min, cfg.alpha_max]
+            h_new : (B, m, hidden_dim)  updated hidden state to carry to next stage
+        """
+        if self.feat_norm_active:
+            features = (features - self.feat_mean) / (self.feat_std + 1e-8)
+
+        B, m, _ = features.shape
+        # Reshape to (B*m, feature_dim) so GRUCell treats each row independently
+        flat_feat = features.reshape(B * m, -1)                     # (B*m, feature_dim)
+
+        if h is None:
+            flat_h = torch.zeros(B * m, self.cfg.hidden_dim,
+                                 dtype=features.dtype, device=features.device)
+        else:
+            flat_h = h.reshape(B * m, self.cfg.hidden_dim)          # (B*m, hidden_dim)
+
+        flat_h_new = self.gru_cell(flat_feat, flat_h)               # (B*m, hidden_dim)
+        raw = self.output_layer(self.post_gru(flat_h_new)).squeeze(-1)  # (B*m,)
+        alpha = torch.sigmoid(raw)                                  # (B*m,)
+
+        alpha_out = (
+            self.cfg.alpha_min
+            + (self.cfg.alpha_max - self.cfg.alpha_min) * alpha
+        ).reshape(B, m)                                             # (B, m)
+
+        h_new = flat_h_new.reshape(B, m, self.cfg.hidden_dim)      # (B, m, hidden_dim)
+        return alpha_out, h_new
+
+
 class ScalarAlphaNet(nn.Module):
     """
     MLP mapping 5-dim global residual features → single scalar alpha per
