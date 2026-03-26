@@ -62,7 +62,7 @@ def _compute_perf_profile_data(solvers, output_folder, metric='run_time'):
 
     # Compute curves
     n_tau = 1000
-    tau_vec = np.logspace(0, 1, n_tau)
+    tau_vec = np.linspace(1, 2, n_tau)
     rho = {'tau': tau_vec}
     for s_ in solvers:
         rho[s_] = np.zeros(n_tau)
@@ -73,18 +73,50 @@ def _compute_perf_profile_data(solvers, output_folder, metric='run_time'):
 
 
 def _plot_profile(rho, solvers, title, output_path):
-    """Plot performance profile to a fresh figure and save."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for solver in solvers:
-        ax.plot(rho['tau'], rho[solver], label=solver)
-    ax.set_xlim(1., 10.)
-    ax.set_ylim(0., 1.)
-    ax.set_xlabel(r'Performance ratio $\tau$')
-    ax.set_ylabel('Ratio of problems solved')
-    ax.set_xscale('log')
-    ax.set_title(title)
-    ax.legend(fontsize=8)
-    ax.grid(True)
+    """Plot performance profile as (1,2) subplots: MLP+baselines | GRU+baselines.
+
+    Performance ratios in ``rho`` are computed over ALL solvers jointly.
+    The two subplots simply filter which curves to show.
+    """
+    baselines = [s_ for s_ in solvers if '_neural_' not in s_]
+    mlp_solvers = [s_ for s_ in solvers if '_neural_mlp_' in s_]
+    gru_solvers = [s_ for s_ in solvers if '_neural_gru_' in s_]
+
+    # If we can split into mlp/gru groups, draw side-by-side subplots
+    if mlp_solvers and gru_solvers:
+        fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(18, 6))
+        for solver in baselines + mlp_solvers:
+            ax_l.plot(rho['tau'], rho[solver], label=solver)
+        ax_l.set_xlim(1., 2.)
+        ax_l.set_ylim(0., 1.)
+        ax_l.set_xlabel(r'Performance ratio $\tau$')
+        ax_l.set_ylabel('Ratio of problems solved')
+        ax_l.set_title(f'{title} — MLP')
+        ax_l.legend(fontsize=7)
+        ax_l.grid(True)
+
+        for solver in baselines + gru_solvers:
+            ax_r.plot(rho['tau'], rho[solver], label=solver)
+        ax_r.set_xlim(1., 2.)
+        ax_r.set_ylim(0., 1.)
+        ax_r.set_xlabel(r'Performance ratio $\tau$')
+        ax_r.set_ylabel('Ratio of problems solved')
+        ax_r.set_title(f'{title} — GRU')
+        ax_r.legend(fontsize=7)
+        ax_r.grid(True)
+    else:
+        # Fallback: single plot (no mlp/gru split possible)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for solver in solvers:
+            ax.plot(rho['tau'], rho[solver], label=solver)
+        ax.set_xlim(1., 2.)
+        ax.set_ylim(0., 1.)
+        ax.set_xlabel(r'Performance ratio $\tau$')
+        ax.set_ylabel('Ratio of problems solved')
+        ax.set_title(title)
+        ax.legend(fontsize=8)
+        ax.grid(True)
+
     fig.tight_layout()
     print("Saving plot to %s" % output_path)
     fig.savefig(output_path, dpi=150)

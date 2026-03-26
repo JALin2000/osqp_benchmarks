@@ -1316,9 +1316,7 @@ class OSQP(object):
             # RL ALPHA: Update alpha before ADMM steps if in alpha mode
             if hasattr(self.work, 'learnt_component_callback') and self.work.settings.learnt_component == 'alpha':
                 try:
-                    alpha_z_new = self.work.learnt_component_callback()
-                    if alpha_z_new is not None:
-                        self.update_alpha_z(alpha_z_new)
+                    self.work.learnt_component_callback()
                 except Exception as e:
                     print(f"Warning: Alpha callback failed: {e}")
 
