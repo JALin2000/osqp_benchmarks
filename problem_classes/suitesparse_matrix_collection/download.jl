@@ -13,7 +13,13 @@ list = mdlist("*/*")
 prob_count = 0
 md_info = 0
 for problem in list
-    global md_kind = mdinfo(problem).content[4].items[end][1].content[1]  # Nasty
+    # global md_kind = mdinfo(problem).content[4].items[end][1].content[1]  # Nasty
+    info = mdinfo(problem)
+    if length(info.content) < 4
+        println("Skipping $problem: unexpected metadata layout")
+        continue
+    end
+    global md_kind = info.content[4].items[end][1].content[1]
 
     # Check if type is correct
     if split(md_kind)[1] == "kind:"  # Got the right kind

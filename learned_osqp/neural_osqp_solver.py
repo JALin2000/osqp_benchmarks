@@ -104,7 +104,8 @@ class NeuralAlphaCallback:
     Per-row ratio f[9] uses unscaled values directly (E_inv cancels element-wise).
     """
 
-    def __init__(self, work, model: PerRowAlphaNet | PerRowGRUNet, cfg: Config, T: int = 10):
+    def __init__(self, work, model: PerRowAlphaNet | PerRowGRUNet, cfg: Config,
+                 T: int = 10, record_history: bool = False):
         self.work = work
         self.model = model
         self.cfg = cfg
@@ -124,6 +125,11 @@ class NeuralAlphaCallback:
         self._pri_res_inf_prev: float = 0.0   # SCALED inf norm (for f[10] ratio)
         self._dua_res_inf_prev: float = 0.0   # SCALED inf norm (for f[11] ratio)
 
+        # History recording (opt-in)
+        self._record_history = record_history
+        self._prev_alpha_z: np.ndarray | None = None   # (m,) previous alpha_z for change computation
+        self._history: dict = {'iter': [], 'alpha_change': []}
+
         # --- Cache static quantities computed once ---
         # A row inf-norms (scaled A) — never changes after setup
         self._A_inf_norms = np.abs(work.data.A).max(axis=1).toarray().ravel()  # (m,)
@@ -137,6 +143,10 @@ class NeuralAlphaCallback:
 
         # Pre-allocate feature buffer (m, 13) — reused every call
         self._feat_buf = np.empty((m, 13), dtype=np.float64)
+
+    def get_history(self) -> dict | None:
+        """Return recorded history dict, or None if record_history=False."""
+        return self._history if self._record_history else None
 
     # ---------------------------------------------------------------- #
     # Feature computation
@@ -231,6 +241,10 @@ class NeuralAlphaCallback:
         if (self.iter_count - 1) % self.T != 0:
             return None
 
+        # Stop NN alpha updates after 500 iterations (keep last alpha)
+        if self.iter_count > 500:
+            return None
+
         # Compute features FIRST (uses prev residuals from the previous stage boundary)
         feat_np, pri_res_inf, dua_res_inf = self._compute_features()         # (m, 13), float, float
         feat_t  = torch.as_tensor(feat_np, dtype=self._torch_dtype).unsqueeze(0)  # (1, m, 13)
@@ -253,8 +267,19 @@ class NeuralAlphaCallback:
         if pri_res_unscaled is not None:
             self._pri_res_unscaled_prev = pri_res_unscaled.copy()
 
-        work.settings.alpha_z = alpha_z_t.squeeze(0).numpy()  # Set alpha_z for the next T iterations
-        # return alpha_z_t.squeeze(0).numpy()                                  # (m,)
+        alpha_z_np = alpha_z_t.squeeze(0).numpy()  # (m,)
+
+        # Record alpha change history (opt-in)
+        if self._record_history:
+            if self._prev_alpha_z is not None:
+                change = float(np.max(np.abs(alpha_z_np - self._prev_alpha_z)))
+            else:
+                change = 0.0
+            self._history['iter'].append(self.iter_count)
+            self._history['alpha_change'].append(change)
+            self._prev_alpha_z = alpha_z_np.copy()
+
+        work.settings.alpha_z = alpha_z_np  # Set alpha_z for the next T iterations
 
 
 # ------------------------------------------------------------------ #
@@ -303,8 +328,10 @@ class NeuralScalarAlphaCallback:
 
         # History recording (opt-in; adds 2 sparse matvecs per stage boundary)
         self._record_history = record_history
+        self._prev_alpha: float | None = None  # previous alpha for change computation
         self._q_inf = float(np.max(np.abs(work.data.q))) if work.data.q.size else 0.0
-        self._history: dict = {'iter': [], 'alpha': [], 'scaled_prim': [], 'scaled_dual': []}
+        self._history: dict = {'iter': [], 'alpha': [], 'alpha_change': [],
+                               'scaled_prim': [], 'scaled_dual': []}
 
     def _compute_features(self) -> tuple[np.ndarray, float, float]:
         """Returns ((6,) feature vector, pri_res_inf_scaled, dua_res_inf_scaled).
@@ -386,6 +413,10 @@ class NeuralScalarAlphaCallback:
         if (self.iter_count - 1) % self.T != 0:
             return None
 
+        # Stop NN alpha updates after 500 iterations (keep last alpha)
+        if self.iter_count > 500:
+            return None
+
         work = self.work
 
         # Compute features FIRST (uses prev residuals from the previous stage boundary)
@@ -407,8 +438,11 @@ class NeuralScalarAlphaCallback:
         # Record history at this stage boundary (opt-in)
         if self._record_history:
             sc_prim, sc_dual = self._compute_scaled_residuals(pri_res_inf, dua_res_inf)
+            change = abs(alpha_val - self._prev_alpha) if self._prev_alpha is not None else 0.0
+            self._prev_alpha = alpha_val
             self._history['iter'].append(self.iter_count)
             self._history['alpha'].append(alpha_val)
+            self._history['alpha_change'].append(change)
             self._history['scaled_prim'].append(sc_prim)
             self._history['scaled_dual'].append(sc_dual)
 
@@ -479,7 +513,10 @@ class NeuralOSQPSolver:
                 record_history=self._record_history,
             )
         else:
-            self._callback = NeuralAlphaCallback(work, self._nn, self._cfg, self._T)
+            self._callback = NeuralAlphaCallback(
+                work, self._nn, self._cfg, self._T,
+                record_history=self._record_history,
+            )
         work.learnt_component_callback = self._callback
 
     def solve(self, total_iters=None):
@@ -487,12 +524,13 @@ class NeuralOSQPSolver:
         return self._osqp.solve(total_iters=total_iters)
 
     def get_alpha_history(self) -> dict | None:
-        """Return per-stage-boundary history dict from the scalar alpha callback.
+        """Return per-stage-boundary history dict from the callback.
 
-        Returns None if alpha_mode != 'scalar' or record_history=False.
-        Keys: 'iter', 'alpha', 'scaled_prim', 'scaled_dual' (all lists).
+        Returns None if record_history=False.
+        Scalar keys: 'iter', 'alpha', 'alpha_change', 'scaled_prim', 'scaled_dual'.
+        Vector keys: 'iter', 'alpha_change'.
         """
-        if isinstance(self._callback, NeuralScalarAlphaCallback):
+        if self._callback is not None and hasattr(self._callback, 'get_history'):
             return self._callback.get_history()
         return None
 

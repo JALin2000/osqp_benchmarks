@@ -1,12 +1,8 @@
 """
-Per-instance alpha history plot for NeuralScalarAlpha solvers.
+Per-instance alpha history plots for Neural OSQP solvers.
 
-Each plot shows, vs ADMM stage boundary (every T iterations):
-  Left  y-axis (log scale): scaled_prim / scaled_dual ratio
-  Right y-axis (linear):    alpha chosen by the neural net
-
-scaled_prim = ||Ax - z||_inf / max(||Ax||_inf, ||z||_inf)
-scaled_dual = ||Px + q + A^T y||_inf / max(||Px||_inf, ||A^T y||_inf, ||q||_inf)
+plot_alpha_history:  dual-axis (scaled_prim/dual ratio + alpha value) — scalar only.
+plot_alpha_change:   alpha change magnitude per stage boundary — both scalar and vector.
 """
 
 import matplotlib
@@ -65,4 +61,44 @@ def plot_alpha_history(history: dict, title: str, output_path: str) -> None:
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
+    plt.close(fig)
+
+
+def plot_alpha_change(history: dict, title: str, output_path: str) -> None:
+    """
+    Plot alpha change magnitude per stage boundary on a log-scale y-axis.
+
+    Works for both scalar and vector alpha modes.  The history dict must
+    contain keys 'iter' and 'alpha_change' (both lists of the same length).
+    For vector mode, alpha_change[i] = max(|alpha_z[i] - alpha_z[i-1]|).
+    For scalar mode, alpha_change[i] = |alpha[i] - alpha[i-1]|.
+
+    Args:
+        history:     dict with keys 'iter', 'alpha_change'
+        title:       plot title string
+        output_path: full file path to save (.png)
+    """
+    iters  = np.asarray(history['iter'],         dtype=float)
+    change = np.asarray(history['alpha_change'], dtype=float)
+
+    if len(iters) < 2:
+        return
+
+    # Skip the first entry (change = 0 by definition)
+    iters  = iters[1:]
+    change = change[1:]
+
+    _EPS = 1e-14
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.2))
+    ax.semilogy(iters, np.clip(change, _EPS, None),
+                color='crimson', linewidth=1.0)
+    ax.set_xlabel('OSQP iteration', fontsize=8)
+    ax.set_ylabel(r'$\alpha$ change magnitude', fontsize=8)
+    ax.set_title(title, fontsize=7)
+    ax.tick_params(labelsize=7)
+    ax.grid(True, which='both', alpha=0.3)
+
+    fig.tight_layout(pad=0.3)
+    fig.savefig(output_path, format='pdf', bbox_inches='tight')
     plt.close(fig)

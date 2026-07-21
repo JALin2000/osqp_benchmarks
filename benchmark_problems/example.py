@@ -14,7 +14,7 @@ from problem_classes.svm import SVMExample
 from problem_classes.huber import HuberExample
 from problem_classes.control import ControlExample
 from utils.general import make_sure_path_exists
-from utils.plot_alpha import plot_alpha_history
+from utils.plot_alpha import plot_alpha_history, plot_alpha_change
 
 examples = [RandomQPExample,
             EqQPExample,
@@ -280,17 +280,26 @@ class Example(object):
                 plot_filename = os.path.join(plot_dir, f'R_b_history_n{dimension}_inst{instance_number}.png')
                 plot_R_and_b_history(results.R_history, results.b_history, plot_filename)
 
-        # Save per-instance alpha history plot for neural scalar-alpha solvers
+        # Save per-instance alpha history plots for neural solvers
         if hasattr(s, 'get_alpha_history'):
             hist = s.get_alpha_history()
-            if hist and hist['iter']:
+            if hist and hist.get('iter'):
                 plot_dir = os.path.join('.', 'results', self.output_folder,
                                         solver, self.name, 'alpha_plots')
                 make_sure_path_exists(plot_dir)
-                fname = os.path.join(plot_dir,
-                                     f'alpha_n{dimension}_inst{instance_number}.png')
                 title = f'{self.name} n={dimension} inst={instance_number} | {solver}'
-                plot_alpha_history(hist, title, fname)
+
+                # Dual-axis plot (scalar only — needs 'alpha' key)
+                if 'alpha' in hist:
+                    fname = os.path.join(plot_dir,
+                                         f'alpha_n{dimension}_inst{instance_number}.png')
+                    plot_alpha_history(hist, title, fname)
+
+                # Alpha change magnitude plot (both scalar and vector)
+                if 'alpha_change' in hist:
+                    fname = os.path.join(plot_dir,
+                                         f'alpha_change_n{dimension}_inst{instance_number}.pdf')
+                    plot_alpha_change(hist, title, fname)
 
         # Return solution
         return pd.DataFrame(solution_dict)

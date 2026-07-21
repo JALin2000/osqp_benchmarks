@@ -6,7 +6,7 @@ import pandas as pd
 from solvers.solvers import SOLVER_MAP
 from problem_classes.maros_meszaros import MarosMeszaros
 from utils.general import make_sure_path_exists
-from utils.plot_alpha import plot_alpha_history
+from utils.plot_alpha import plot_alpha_history, plot_alpha_change
 from utils.maros_meszaros import OPT_COST_MAP
 
 import numpy as np
@@ -186,16 +186,20 @@ class MarosMeszarosRunner(object):
             solution_dict['update_time'] = results.update_time
             solution_dict['rho_updates'] = results.rho_updates
 
-        # Save per-instance alpha history plot for neural scalar-alpha solvers
+        # Save per-instance alpha history plots for neural solvers
         if hasattr(s, 'get_alpha_history'):
             hist = s.get_alpha_history()
-            if hist and hist['iter']:
+            if hist and hist.get('iter'):
                 plot_dir = os.path.join('.', 'results', self.output_folder,
                                         solver, 'alpha_plots')
                 make_sure_path_exists(plot_dir)
-                fname = os.path.join(plot_dir, f'alpha_{problem}.png')
                 title = f'MarosMeszaros {problem} | {solver}'
-                plot_alpha_history(hist, title, fname)
+                if 'alpha' in hist:
+                    plot_alpha_history(hist, title,
+                                      os.path.join(plot_dir, f'alpha_{problem}.png'))
+                if 'alpha_change' in hist:
+                    plot_alpha_change(hist, title,
+                                     os.path.join(plot_dir, f'alpha_change_{problem}.pdf'))
 
         print(" - Solved %s with solver %s" % (problem, solver))
 

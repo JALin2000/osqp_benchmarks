@@ -42,24 +42,31 @@ parser.add_argument('--parallel', help='Parallel solution', default=False,
                     action='store_true')
 parser.add_argument('--small', help='Use small test (fast)', default=False,
                     action='store_true')
+parser.add_argument('--mode', help='Run mode: benchmark or plot', default='benchmark',
+                    choices=['benchmark', 'plot'])
 args = parser.parse_args()
 high_accuracy = args.high_accuracy
 verbose = args.verbose
 parallel = args.parallel
 small_test = args.small
+mode = args.mode
 
 print('high_accuracy:', high_accuracy)
 print('verbose:', verbose)
 print('parallel:', parallel)
 print('small test:', small_test)
+print('mode:', mode)
 
 # Number of instances and dimensions
 if small_test:
     n_instances = 3
     n_dim = 5
-else:
+elif mode == 'benchmark':
     n_instances = 10
     n_dim = 10
+else:  # plot
+    n_instances = 1
+    n_dim = 1
 
 # --------------------------------------------------------------------------- #
 # QP types and dimensions
@@ -72,30 +79,22 @@ problems = [
     'Control',
 ]
 
-# problem_dimensions = {
-#     'Random QP': gen_int_log_space(100, 250, n_dim),
-#     'Portfolio': gen_int_log_space(5, 50, n_dim),
-#     'Lasso': gen_int_log_space(5, 50, n_dim),
-#     'SVM': gen_int_log_space(5, 25, n_dim),
-#     'Control': gen_int_log_space(40, 160, n_dim),
-# }
-
-problem_dimensions = {
-    'Random QP': gen_int_log_space(500, 500, n_dim),
-    'Portfolio': gen_int_log_space(50, 100, n_dim),
-    'Lasso': gen_int_log_space(50, 100, n_dim),
-    'SVM': gen_int_log_space(50, 100, n_dim),
-    'Control': gen_int_log_space(200, 200, n_dim),
-}
-
-# for plotting
-# problem_dimensions = {
-#     'Random QP': gen_int_log_space(500, 10, 1),
-#     'Portfolio': gen_int_log_space(100, 10, 1),
-#     'Lasso': gen_int_log_space(100, 10, 1),
-#     'SVM': gen_int_log_space(100, 10, 1),
-#     'Control': gen_int_log_space(300, 10, 1),
-# }
+if mode == 'benchmark':
+    problem_dimensions = {
+        'Random QP': gen_int_log_space(500, 500, n_dim),
+        'Portfolio': gen_int_log_space(50, 100, n_dim),
+        'Lasso': gen_int_log_space(50, 100, n_dim),
+        'SVM': gen_int_log_space(50, 100, n_dim),
+        'Control': gen_int_log_space(200, 200, n_dim),
+    }
+else:  # plot
+    problem_dimensions = {
+        'Random QP': gen_int_log_space(500, 10, 1),
+        'Portfolio': gen_int_log_space(100, 10, 1),
+        'Lasso': gen_int_log_space(100, 10, 1),
+        'SVM': gen_int_log_space(100, 10, 1),
+        'Control': gen_int_log_space(300, 10, 1),
+    }
 
 problem_parallel = {p: parallel for p in problems}
 
@@ -108,7 +107,7 @@ QP_TYPE_MAP = {
     'Control': 'control',
 }
 
-CHECKPOINT_DIR = os.path.join('learned_osqp', 'checkpoints_arc', '0319_feat_pri_dua_res_scaled_alpha_1.25_1.95')
+CHECKPOINT_DIR = os.path.join('learned_osqp', 'checkpoints_arc', '0324_feat_unscaled_alpha_1.25_1.95_loss_softplus')
 
 # --------------------------------------------------------------------------- #
 # Shared OSQP settings
@@ -174,7 +173,7 @@ def _register_cross_neural_solvers(qp_key: str) -> list:
     Returns list of added solver names.
     """
     names = []
-    for model_type in ['mlp', 'gru']:
+    for model_type in ['mlp']:
         for alpha_mode in ['scalar', 'vector']:
             for ckpt_arho in [True, False]:
                 ckpt_arho_s = 'arho' if ckpt_arho else 'noarho'
@@ -193,7 +192,7 @@ def _register_cross_neural_solvers(qp_key: str) -> list:
                         checkpoint_path=ckpt_path,
                         alpha_mode=alpha_mode,
                         model_type=model_type,
-                        record_history=False,
+                        record_history=(mode == 'plot'),
                     )
                     s.settings[name] = _make_settings(adaptive_rho=osqp_arho)
                     names.append(name)
@@ -220,7 +219,7 @@ for problem in problems:
     solver_names.append(name)
 
     # ---- 3-14. Neural variants (mlp + gru) ----
-    for model_type in ['mlp', 'gru']:
+    for model_type in ['mlp']:
         for arho in [True, False]:
             arho_str = 'arho' if arho else 'no_arho'
             # With adaptive_rho: test both best_iter and best_rho checkpoints
@@ -239,19 +238,19 @@ for problem in problems:
                         checkpoint_path=ckpt_path,
                         alpha_mode=alpha_mode,
                         model_type=model_type,
-                        record_history=False,
+                        record_history=(mode == 'plot'),
                     )
                     s.settings[name] = _make_settings(adaptive_rho=arho)
                     solver_names.append(name)
 
     # ---- Cross-test: ckpt_arho != osqp_arho ----
-    solver_names += _register_cross_neural_solvers(qp_key)
+    # solver_names += _register_cross_neural_solvers(qp_key)
 
     if verbose:
         for name in solver_names:
             s.settings[name]['verbose'] = True
 
-    OUTPUT_FOLDER = f'0319_neural_comparison_{qp_key}_solver'
+    OUTPUT_FOLDER = f'0324_neural_comparison_{qp_key}_solver_alpha_freeze'
 
     print("\n" + "=" * 80)
     print(f"Testing {problem} — {len(solver_names)} solver configs")
@@ -294,7 +293,7 @@ print("\n" + "=" * 80)
 print("Testing SuitesparseLasso with lasso neural solvers")
 print("=" * 80 + "\n")
 
-SS_OUTPUT_FOLDER = f'0319_neural_comparison_suitesparse_lasso_solver'
+SS_OUTPUT_FOLDER = f'0324_neural_comparison_suitesparse_lasso_solver'
 ss_solver_names = []
 
 # ---- 1. OSQP_python with adaptive_rho ----
@@ -310,7 +309,7 @@ s.settings[name] = _make_settings(adaptive_rho=False)
 ss_solver_names.append(name)
 
 # ---- 3-14. Neural variants (lasso checkpoints, mlp + gru) ----
-for model_type in ['mlp', 'gru']:
+for model_type in ['mlp']:
     for arho in [True, False]:
         arho_str = 'arho' if arho else 'no_arho'
         ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
@@ -331,7 +330,7 @@ for model_type in ['mlp', 'gru']:
                 ss_solver_names.append(name)
 
 # ---- Cross-test: ckpt_arho != osqp_arho ----
-ss_solver_names += _register_cross_neural_solvers('lasso')
+# ss_solver_names += _register_cross_neural_solvers('lasso')
 
 if verbose:
     for name in ss_solver_names:
@@ -365,81 +364,81 @@ print("\n" + "=" * 80)
 print("SuitesparseLasso completed!")
 print("=" * 80)
 
-# --------------------------------------------------------------------------- #
-# Maros-Meszaros problems with control-trained neural solvers
-# --------------------------------------------------------------------------- #
-print("\n" + "=" * 80)
-print("Testing Maros-Meszaros with control neural solvers")
-print("=" * 80 + "\n")
+# # --------------------------------------------------------------------------- #
+# # Maros-Meszaros problems with control-trained neural solvers
+# # --------------------------------------------------------------------------- #
+# print("\n" + "=" * 80)
+# print("Testing Maros-Meszaros with control neural solvers")
+# print("=" * 80 + "\n")
 
-MM_OUTPUT_FOLDER = f'0319_neural_comparison_maros_meszaros_solver'
-mm_solver_names = []
+# MM_OUTPUT_FOLDER = f'0324_neural_comparison_maros_meszaros_solver'
+# mm_solver_names = []
 
-# ---- 1. OSQP_python with adaptive_rho ----
-name = 'OSQP_python_arho'
-s.SOLVER_MAP[name] = OSQPPythonSolver
-s.settings[name] = _make_settings(adaptive_rho=True)
-mm_solver_names.append(name)
+# # ---- 1. OSQP_python with adaptive_rho ----
+# name = 'OSQP_python_arho'
+# s.SOLVER_MAP[name] = OSQPPythonSolver
+# s.settings[name] = _make_settings(adaptive_rho=True)
+# mm_solver_names.append(name)
 
-# ---- 2. OSQP_python without adaptive_rho ----
-name = 'OSQP_python_no_arho'
-s.SOLVER_MAP[name] = OSQPPythonSolver
-s.settings[name] = _make_settings(adaptive_rho=False)
-mm_solver_names.append(name)
+# # ---- 2. OSQP_python without adaptive_rho ----
+# name = 'OSQP_python_no_arho'
+# s.SOLVER_MAP[name] = OSQPPythonSolver
+# s.settings[name] = _make_settings(adaptive_rho=False)
+# mm_solver_names.append(name)
 
-# ---- 3-14. Neural variants (control checkpoints, mlp + gru) ----
-for model_type in ['mlp', 'gru']:
-    for arho in [True, False]:
-        arho_str = 'arho' if arho else 'no_arho'
-        ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
+# # ---- 3-14. Neural variants (control checkpoints, mlp + gru) ----
+# for model_type in ['mlp', 'gru']:
+#     for arho in [True, False]:
+#         arho_str = 'arho' if arho else 'no_arho'
+#         ckpt_types = ['best_iter', 'best_rho'] if arho else ['best_iter']
 
-        for alpha_mode in ['scalar', 'vector']:
-            for ckpt_type in ckpt_types:
-                ckpt_path = _ckpt_path('control', arho, alpha_mode,
-                                       model_type, ckpt_type)
+#         for alpha_mode in ['scalar', 'vector']:
+#             for ckpt_type in ckpt_types:
+#                 ckpt_path = _ckpt_path('control', arho, alpha_mode,
+#                                        model_type, ckpt_type)
 
-                name = f'OSQP_python_neural_{model_type}_{alpha_mode}_{arho_str}_{ckpt_type}'
-                s.SOLVER_MAP[name] = partial(
-                    NeuralOSQPSolver,
-                    checkpoint_path=ckpt_path,
-                    alpha_mode=alpha_mode,
-                    model_type=model_type,
-                )
-                s.settings[name] = _make_settings(adaptive_rho=arho)
-                mm_solver_names.append(name)
+#                 name = f'OSQP_python_neural_{model_type}_{alpha_mode}_{arho_str}_{ckpt_type}'
+#                 s.SOLVER_MAP[name] = partial(
+#                     NeuralOSQPSolver,
+#                     checkpoint_path=ckpt_path,
+#                     alpha_mode=alpha_mode,
+#                     model_type=model_type,
+#                 )
+#                 s.settings[name] = _make_settings(adaptive_rho=arho)
+#                 mm_solver_names.append(name)
 
-# ---- Cross-test: ckpt_arho != osqp_arho ----
-mm_solver_names += _register_cross_neural_solvers('control')
+# # ---- Cross-test: ckpt_arho != osqp_arho ----
+# mm_solver_names += _register_cross_neural_solvers('control')
 
-if verbose:
-    for name in mm_solver_names:
-        s.settings[name]['verbose'] = True
+# if verbose:
+#     for name in mm_solver_names:
+#         s.settings[name]['verbose'] = True
 
-print("Solvers:", mm_solver_names)
+# print("Solvers:", mm_solver_names)
 
-mm_runner = MarosMeszarosRunner(
-    mm_solver_names,
-    s.settings,
-    MM_OUTPUT_FOLDER,
-)
-mm_runner.solve(parallel=parallel)
+# mm_runner = MarosMeszarosRunner(
+#     mm_solver_names,
+#     s.settings,
+#     MM_OUTPUT_FOLDER,
+# )
+# mm_runner.solve(parallel=parallel)
 
-print("\n" + "=" * 80)
-print("Computing Statistics for Maros-Meszaros")
-print("=" * 80 + "\n")
+# print("\n" + "=" * 80)
+# print("Computing Statistics for Maros-Meszaros")
+# print("=" * 80 + "\n")
 
-try:
-    # MarosMeszarosRunner writes results.csv directly (no per-class subdir),
-    # so pass problems=None to skip get_cumulative_data
-    compute_stats_info_split(
-        mm_solver_names,
-        MM_OUTPUT_FOLDER,
-        problems=None,
-        high_accuracy=high_accuracy,
-    )
-except FileNotFoundError as e:
-    print("Note: compute_stats_info skipped (missing files): %s" % e)
+# try:
+#     # MarosMeszarosRunner writes results.csv directly (no per-class subdir),
+#     # so pass problems=None to skip get_cumulative_data
+#     compute_stats_info_split(
+#         mm_solver_names,
+#         MM_OUTPUT_FOLDER,
+#         problems=None,
+#         high_accuracy=high_accuracy,
+#     )
+# except FileNotFoundError as e:
+#     print("Note: compute_stats_info skipped (missing files): %s" % e)
 
-print("\n" + "=" * 80)
-print("Maros-Meszaros completed!")
-print("=" * 80)
+# print("\n" + "=" * 80)
+# print("Maros-Meszaros completed!")
+# print("=" * 80)
